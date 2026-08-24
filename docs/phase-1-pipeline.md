@@ -16,7 +16,7 @@
 ## 준비물
 
 - [x] **두 번째 인스타 계정** — 일반 계정이면 되고 이메일만 있으면 2분. 자기 글에 자기가 댓글 달면 Private Reply가 실패하므로 필수 ([`meta-api.md`](./meta-api.md) #12)
-- [x] AWS 배포 전용 IAM 유저 `ig-bot-deployer` (프로파일 `ig-bot`) + 아티팩트 버킷 `ig-comment-bot-artifacts-311912733888-ap-northeast-2` — 완료 2026-08-25
+- [x] AWS 배포 전용 IAM 유저 `ig-bot-deployer` (프로파일 `ig-bot`) + 아티팩트 버킷 `ig-comment-bot-artifacts-311912733888-ap-southeast-1` — 완료 2026-08-25
 - [x] Neon 프로젝트 (무료 티어) — 완료 2026-08-25
 
 ## 할 일

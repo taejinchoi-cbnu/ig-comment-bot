@@ -30,6 +30,7 @@ Instagram ──webhook───────────────────
 | **CloudFront 단일 도메인** | SPA와 API가 같은 오리진 → **CORS 설정이 필요 없다**. Meta에 줄 webhook URL도 같은 도메인 |
 | **PostgreSQL + Prisma** | 데이터가 관계형이고, 대시보드/퍼널 쿼리가 SQL 한 줄로 끝난다. 멱등성도 `ON CONFLICT` / `UPDATE ... RETURNING`으로 단순해진다. Neon 무료 티어 + scale-to-zero, serverless driver라 Lambda 커넥션 풀링 문제가 없다 |
 | **자체 JWT 인증** (passport-local + `@nestjs/jwt`) | 사용자가 25명 이하이고 어차피 운영자가 수동 승인(Instagram Tester 초대)한다. Cognito/Clerk는 이 규모에 과하다 |
+| **리전 `ap-southeast-1`(싱가포르)** | Neon과 같은 리전에 둔다. 아래 §리전 참고 |
 | **VPC 미사용** | 전부 서버리스라 VPC 밖에서 동작한다. VPC에 넣으면 아웃바운드용 NAT Gateway가 **월 ~$32** 붙고 콜드스타트만 늘어난다. 순손실 |
 | **고객별 IAM 유저 안 만듦** | 고객은 AWS를 호출하지 않는다(모든 호출은 우리 Lambda가 한다) → 귀속될 요청이 0건. 게다가 **AWS 청구에는 IAM 주체별 비용 축이 없다**. 사용량은 `Event` 테이블로 센다 |
 
@@ -241,6 +242,42 @@ aws cloudfront create-invalidation --distribution-id "$CF_ID" --paths '/*'
 ```
 
 IAM은 배포 전용 유저 `ig-bot-deployer` 1개 + CI용 OIDC Role 1개.
+
+---
+
+## 리전 — 싱가포르 (`ap-southeast-1`)
+
+**Neon에는 서울·도쿄 리전이 없다.** 아시아는 싱가포르와 시드니뿐이고,
+**기존 프로젝트의 리전은 변경할 수 없다.** 그래서 DB는 싱가포르로 고정이고,
+남는 결정은 "Lambda를 어디 둘 것인가" 하나다.
+
+로컬(한국)에서 Neon 싱가포르로 실측한 값:
+
+```
+select 1 왕복   76.4 ms   (5회 평균, pooled/direct 동일)
+최초 연결       ~500 ms   (scale-to-zero 에서 깨어날 때 +@)
+```
+
+76ms는 서울↔싱가포르 RTT다. 이 값을 어디서 내느냐가 갈린다.
+
+| | Lambda 서울 | **Lambda 싱가포르** |
+|---|---|---|
+| Worker 1건 (쿼리 5회) | 5 × 76ms = **380ms** | 5 × 2ms = **10ms** |
+| 대시보드 (한국 사용자) | 10ms + 380ms = **~390ms** | 70ms + 10ms = **~150ms** |
+
+**직관과 반대로 한국 사용자 체감도 싱가포르가 빠르다.**
+사용자↔API 왕복은 **한 번**만 내면 되는데, API↔DB 왕복은 **쿼리 수만큼 곱해진다.**
+76ms를 다섯 번 내는 것보다 70ms를 한 번 내는 쪽이 낫다.
+
+> 개인정보 소재지는 이 선택과 무관하다. 데이터는 어느 쪽이든 Neon 싱가포르에 있고,
+> 설계상 **사전예약 양식 본문은 저장하지 않는다** (username과 이벤트 메타데이터만).
+
+### 알아둘 것 — scale-to-zero 콜드스타트
+
+Neon 무료 티어는 유휴 시 컴퓨트를 0으로 내린다. 깨어나는 데 **~500ms**가 붙는다.
+webhook 경로는 `slug → 계정` 조회 한 번이 임계 경로에 있으므로, 오래 조용하다가 첫 댓글이 오면
+그만큼 느리다. Meta의 webhook 타임아웃은 넉넉해서 동작에는 문제가 없다.
+문제가 되면 그때 계정 조회를 Lambda 메모리에 캐시한다. **지금은 하지 않는다.**
 
 ---
 
