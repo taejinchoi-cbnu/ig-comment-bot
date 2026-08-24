@@ -15,9 +15,9 @@
 
 ## 준비물
 
-- [ ] **두 번째 인스타 계정** — 일반 계정이면 되고 이메일만 있으면 2분. 자기 글에 자기가 댓글 달면 Private Reply가 실패하므로 필수 ([`meta-api.md`](./meta-api.md) #12)
-- [ ] AWS 배포 전용 IAM 유저 `ig-bot-deployer` + 아티팩트 S3 버킷
-- [ ] Neon 프로젝트 (무료 티어)
+- [x] **두 번째 인스타 계정** — 일반 계정이면 되고 이메일만 있으면 2분. 자기 글에 자기가 댓글 달면 Private Reply가 실패하므로 필수 ([`meta-api.md`](./meta-api.md) #12)
+- [x] AWS 배포 전용 IAM 유저 `ig-bot-deployer` (프로파일 `ig-bot`) + 아티팩트 버킷 `ig-comment-bot-artifacts-311912733888-ap-northeast-2` — 완료 2026-08-25
+- [x] Neon 프로젝트 (무료 티어) — 완료 2026-08-25
 
 ## 할 일
 
@@ -56,7 +56,7 @@
 - [ ] 배포 후 Function URL 확보
 
 ### 7. Meta 연결
-- [ ] [`meta-api.md`](./meta-api.md) §4 절차 1~6 수행 (**6번 `subscribed_apps` 빠뜨리지 말 것**)
+- [ ] [`meta-api.md`](./meta-api.md) §4 절차 1~6 수행 (권한에 `instagram_business_manage_insights` 포함 — Phase 3에서 필요) (**6번 `subscribed_apps` 빠뜨리지 말 것**)
 - [ ] 두 번째 계정을 **Instagram Tester로 초대 → 수락**
 - [ ] 계정 1개 + 캠페인 2개(문구가 서로 다르게)를 SQL로 직접 삽입
 

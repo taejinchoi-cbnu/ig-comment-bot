@@ -33,7 +33,7 @@
 instagram_business_basic
 instagram_business_manage_comments
 instagram_business_manage_messages
-instagram_business_manage_insights   # Phase 4 (도달/노출 지표)
+instagram_business_manage_insights   # Phase 3 (팔로워 추이·인구통계). 아래 §7
 ```
 
 ---
@@ -184,7 +184,60 @@ CloudWatch 로그에 webhook 요청이 찍혔는가?
 
 ---
 
-## 7. 참고 링크
+## 7. Insights — 분석에 쓸 수 있는 것과 없는 것
+
+Phase 3에서 쓴다. 권한 `instagram_business_manage_insights` 가 추가로 필요하고,
+[§4 연결 절차](#4-계정-연결-절차-모델-b)에서 사용자가 이 권한도 승인해야 한다.
+
+### 되는 것
+
+| 지표 | 요청 | 제약 |
+|---|---|---|
+| 팔로워 수 추이 | `metric=follower_count`, `metric_type=time_series`, `period=day` | **100팔로워 미만 계정은 안 나옴** |
+| 팔로워 인구통계 | `metric=follower_demographics`, `period=lifetime`, `metric_type=total_value`, `timeframe=`, `breakdown=` | 위와 동일 |
+| 반응자 인구통계 | `metric=engaged_audience_demographics` (나머지 동일) | 위와 동일 |
+| **개인별 팔로워 여부** | `GET /{IGSID}?fields=is_user_follow_business` | **대화 성립 후에만** |
+
+```http
+GET /v25.0/{IG_USER_ID}/insights
+  ?metric=follower_demographics
+  &period=lifetime
+  &metric_type=total_value
+  &timeframe=last_30_days        # last_14_days | last_30_days | last_90_days | prev_month | this_month | this_week
+  &breakdown=age                 # age | gender | city | country
+```
+
+### 안 되는 것 — 대체 수단 없음
+
+| | 왜 |
+|---|---|
+| **팔로워 목록 (누가 팔로우했는지)** | 개인을 식별하는 팔로워 목록 엔드포인트가 **존재하지 않는다.** 집계만 제공 |
+| **게시글별 팔로워 증가 귀속** | `follower_count`는 계정 단위 일별 수치. "이 게시글로 12명 늘었다"는 만들 수 없다 |
+
+캠페인 기간과 팔로워 그래프를 겹쳐 보여주는 것까지는 되지만 **상관관계이지 인과가 아니다.**
+화면 문구도 "이 기간에 +47명"이지 "이 게시글이 47명을 데려왔다"가 아니어야 한다.
+
+### 그 대신 — 캠페인 단위로 실측 가능한 지표
+
+`is_user_follow_business`는 **개인별로** 조회된다. 캠페인에 반응한 사람마다 찍으면:
+
+> "이 게시글 반응자 41명 중 팔로워 28명 / 비팔로워 13명"
+
+이건 계정 단위 집계가 아니라 **게시글 단위 실측**이고, 팔로워 증가를 귀속시키지 못하는 문제를
+정면으로 우회한다. 상용 도구가 보여주지 않는 숫자다.
+
+- 조회 시점: 사용자가 DM으로 답장한 직후(대화 성립 시점)
+- 결과는 `Event` 행에 함께 기록한다. 나중에 다시 조회하면 값이 달라져 과거 통계가 흔들린다
+- 반응자 1명당 API 호출 1회 → 호출량은 답장 수만큼. 지금 규모에선 문제없음
+
+### 테스트 시 주의
+
+테스트 계정이 **100팔로워 미만이면 `follower_count`와 인구통계가 아예 안 나온다.**
+Phase 3 검증 시 팔로워가 있는 실계정(지인 계정)으로 확인해야 한다. 개인별 팔로워 여부는 이 제한과 무관하다.
+
+---
+
+## 8. 참고 링크
 
 - [Instagram Platform Overview (Standard vs Advanced Access)](https://developers.facebook.com/docs/instagram-platform/overview/)
 - [Webhooks](https://developers.facebook.com/docs/instagram-platform/webhooks)
