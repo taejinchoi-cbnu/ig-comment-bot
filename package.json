@@ -1,0 +1,12 @@
+{
+  "name": "ig-comment-bot",
+  "private": true,
+  "packageManager": "pnpm@10.5.2",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build",
+    "verify": "pnpm typecheck && pnpm test && pnpm build"
+  }
+}

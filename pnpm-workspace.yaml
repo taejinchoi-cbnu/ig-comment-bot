@@ -1,0 +1,3 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'     # Phase 2에서 shared 추가 예정

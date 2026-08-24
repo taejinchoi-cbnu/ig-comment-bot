@@ -21,10 +21,11 @@
 
 ## 할 일
 
-### 1. 프로젝트 뼈대
-- [ ] pnpm 워크스페이스 (`apps/api`, `packages/shared`)
-- [ ] NestJS + TS + Prisma 설치, `tsconfig` 정리
-- [ ] `pnpm test` = `node --test` / `pnpm typecheck` = `tsc --noEmit`
+### 1. 프로젝트 뼈대 ✅
+- [x] pnpm 워크스페이스 + NestJS 11 + TypeScript **5.9.3** (`@nestjs/cli`가 의존하는 버전. TS 7은 네이티브 재작성판이라 `emitDecoratorMetadata` 경로가 미검증)
+- [x] `pnpm verify` = typecheck → test → build
+- [x] `GET /health` 부팅 확인
+- [x] `packages/shared` 는 **Phase 2로 미룸** — 소비자가 web 하나 더 생겨야 의미가 있고, 지금 만들면 크로스 패키지 TS 해석 설정만 떠안는다
 
 ### 2. 데이터
 - [ ] Prisma 스키마 작성 ([`architecture.md`](./architecture.md) 데이터 모델 그대로)

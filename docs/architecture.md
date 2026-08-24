@@ -222,6 +222,31 @@ Claude Design 결과가 나오면 클래스만 교체하면 되도록.
 
 ---
 
+## 빌드와 테스트
+
+테스트 프레임워크를 넣지 않는다. Node 24 내장 `node --test` + 타입 스트리핑으로 **컴파일 없이 `.ts`를 직접** 돌린다.
+
+```jsonc
+// tsconfig.base.json — 이 두 줄이 핵심
+"allowImportingTsExtensions": true,     // 테스트가 './trigger.ts' 를 직접 import
+"rewriteRelativeImportExtensions": true // 빌드 시 './trigger.js' 로 자동 재작성
+```
+
+`rewriteRelativeImportExtensions`(TS 5.7+)가 없으면 둘 중 하나를 포기해야 한다 —
+`.ts` import는 `allowImportingTsExtensions`가 필요한데 그건 원래 emit을 막기 때문이다.
+실측으로 확인한 결과 `nest build` 산출물에 `require("./trigger.js")`로 정확히 나온다.
+
+**순수 함수에는 데코레이터를 쓰지 않는다.** 타입 스트리핑은 타입만 지우고
+데코레이터·파라미터 프로퍼티는 변환하지 못한다. `normalize` `signature` `trigger` 같은
+테스트 핵심 모듈이 NestJS 데코레이터를 물면 그 순간 `node --test`가 깨진다.
+
+- 테스트는 `tsconfig.build.json`에서 제외되어 빌드 산출물에 섞이지 않는다
+- 경고 두 개(`ExperimentalWarning`, `MODULE_TYPELESS_PACKAGE_JSON`)는 원인을 알고
+  `--disable-warning`으로 억제한다. 테스트는 ESM, 빌드 산출물은 CJS라
+  `package.json`에 `type`을 박을 수 없다 (`"commonjs"`로 두면 Node가 ESM 문법을 거부)
+
+---
+
 ## 배포
 
 SAM CLI를 설치하지 않는다. SAM transform은 CloudFormation이 서버 측에서 처리하므로 `CAPABILITY_AUTO_EXPAND`면 충분하다.
