@@ -1,0 +1,21 @@
+# 운영자 전용 — 배포 설정, 고객 작업 파일, 문구 파일. 규칙은 이 한 줄뿐
+/ops/
+
+# 시크릿
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 빌드 산출물
+dist/
+build/
+node_modules/
+packaged.yaml
+.aws-sam/
+
+# 기타
+.DS_Store
+*.log
+coverage/

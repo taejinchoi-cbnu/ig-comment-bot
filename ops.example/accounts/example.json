@@ -1,0 +1,6 @@
+{
+  "_comment": "계정 온보딩 작업용 메모. 토큰/시크릿은 여기 두지 말고 즉시 API로 넘겨 암호화 저장할 것",
+  "igUserId": "17841400000000000",
+  "username": "example",
+  "note": "2026-09-01 연결, Instagram Tester 초대 수락 완료"
+}
