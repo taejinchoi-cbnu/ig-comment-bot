@@ -51,6 +51,7 @@ Phase 1이 미지의 위험(Meta 함정 · Tester 초대 · `subscribed_apps`)�
 | [`meta-api.md`](./meta-api.md) | Meta/Instagram **검증된 제약과 함정 14개** · 연결 절차 · 트러블슈팅 | ★가장 자주. 뭔가 안 되면 여기부터 |
 | [`phase-*.md`](./phase-1-pipeline.md) | 단계별 할 일 · 검증 · 진행 기록 | 해당 단계 작업 중 |
 | [`archive/`](./archive/) | 원본 설계 (오류 5개 포함, 이력용) | 참조하지 말 것 |
+| [`../study/`](../study/) | 회고 (PAAR) — 왜 그렇게 결정했고 무엇이 틀렸는가 | 단계가 끝날 때 작성 |
 
 각 Phase는 **해당 문서 하나만 열어서** 진행하고, 끝나면 `진행 기록`과 위 현황 표를 갱신한다.
 
