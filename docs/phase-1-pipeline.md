@@ -28,9 +28,22 @@
 - [x] `packages/shared` 는 **Phase 2로 미룸** — 소비자가 web 하나 더 생겨야 의미가 있고, 지금 만들면 크로스 패키지 TS 해석 설정만 떠안는다
 
 ### 2. 데이터
-- [ ] Prisma 스키마 작성 ([`architecture.md`](./architecture.md) 데이터 모델 그대로)
-- [ ] Neon 연결, 첫 마이그레이션
+
+**Prisma 7 기준으로 진행한다.** 6.x 예제를 따라하면 맞지 않는다 —
+어댑터 필수, `datasource.url`이 `prisma.config.ts`로 이동, `directUrl` 제거,
+`generator output` 필수, `dotenv` 명시적 로드. 자세히는 [`architecture.md`](./architecture.md) §Prisma 7 구성.
+
+- [ ] `prisma@7` `@prisma/client@7` `@prisma/adapter-pg` `dotenv` 설치
+- [ ] `prisma.config.ts` — `datasource.url` 에 **`DATABASE_URL_UNPOOLED`** (마이그레이션은 직결 필요)
+- [ ] `schema.prisma` — [`architecture.md`](./architecture.md) §데이터 모델 그대로
+- [ ] 첫 마이그레이션 → **테이블을 눈으로 확인하고 넘어간다**
+- [ ] `prisma/client.ts` — `PrismaPg` 어댑터에 **pooled** `DATABASE_URL`
 - [ ] `crypto/` — AES-256-GCM 암복호화 + Secrets Manager 마스터 키 조회(모듈 스코프 캐시)
+
+> ⚠️ `prisma migrate dev` 는 shadow 데이터베이스를 만들었다 지운다.
+> Neon 역할에 `CREATE DATABASE` 권한이 없으면 실패한다.
+> 그 경우 `prisma.config.ts` 의 `datasource.shadowDatabaseUrl` 에 별도 DB를 지정하거나
+> `migrate diff` + `migrate deploy` 로 우회한다.
 
 ### 3. 수신 경로
 - [ ] `webhook/signature.ts` — HMAC, **App Secret 2종 시도**, `isBase64Encoded` 처리

@@ -38,75 +38,204 @@ Instagram ──webhook───────────────────
 
 ---
 
-## 데이터 모델 (Prisma)
+## Prisma 7 구성
+
+Prisma 7은 **드라이버 어댑터가 필수**다. PrismaClient가 더 이상 자체적으로 DB에 연결하지 않고,
+`datasource.url`은 스키마가 아니라 `prisma.config.ts`로 옮겨갔으며 **`directUrl`은 제거**됐다.
+6.x 기준 예제를 그대로 따라하면 맞지 않는다.
+
+결과적으로 **CLI와 런타임이 서로 다른 URL을 쓰도록 분리**됐는데, Neon 구성에 오히려 잘 맞는다.
+
+| | 쓰는 URL | 이유 |
+|---|---|---|
+| `prisma migrate` (CLI) | `DATABASE_URL_UNPOOLED` | 마이그레이션은 PgBouncer를 지원하지 않는다 |
+| `PrismaClient` (런타임) | `DATABASE_URL` (pooled) | 짧은 연결이 많은 서버리스에 적합 |
+
+```ts
+// prisma.config.ts — CLI 전용
+import 'dotenv/config';
+import { defineConfig, env } from 'prisma/config';
+
+export default defineConfig({
+  schema: 'prisma/schema.prisma',
+  migrations: { path: 'prisma/migrations' },
+  datasource: { url: env('DATABASE_URL_UNPOOLED') },  // 예전의 directUrl 자리
+});
+```
+
+```ts
+// 런타임 — 어댑터에 pooled URL
+import { PrismaClient } from '../generated/prisma/client.ts';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+export const prisma = new PrismaClient({ adapter });
+```
+
+**어댑터는 `@prisma/adapter-pg`를 쓴다.** Neon 전용 `@prisma/adapter-neon`(WebSocket)도 있지만,
+그 장점인 "TCP 핸드셰이크 회피"는 원거리 연결에서 나온다. 우리는 Lambda와 DB가 같은 리전이라
+효과가 작고, `adapter-pg`는 어떤 Postgres에서도 그대로 동작해 이식성이 남는다.
+콜드스타트 실측에서 연결 설정이 병목으로 잡히면 그때 교체한다.
+
+주의할 것:
+- **환경변수가 자동 로드되지 않는다.** `dotenv`를 명시적으로 import해야 한다
+- `generator client`의 `output`이 **필수**가 됐다. 더 이상 `node_modules`에 생성되지 않는다
+- **테스트 대상 순수 함수는 생성된 Prisma 코드를 import하지 않는다.** `normalize` `signature` `trigger`는
+  평범한 인자만 받는다 — 타입 스트리핑이 못 다루는 문법이 딸려 들어오는 것을 막고,
+  테스트에서 DB를 흉내 낼 필요도 없어진다
+
+---
+
+## 데이터 모델
 
 ```prisma
+enum UserStatus        { PENDING ACTIVE }
+enum AccountStatus     { DRAFT CONNECTED ERROR }
+enum ConversationState { WAITING_USER_MESSAGE USER_REPLIED FORM_SENT }
+
+enum EventType {
+  COMMENT_RECEIVED  COMMENT_SKIPPED  PRIVATE_REPLY_SENT
+  USER_REPLIED      FOLLOW_UP_SENT   FAILED
+}
+
+enum SkipReason {
+  SELF_COMMENT  NO_KEYWORD_MATCH  DUPLICATE
+  CAMPAIGN_DISABLED  ECHO  NO_TEXT  ACCOUNT_MISMATCH
+}
+
 model User {
-  id, email @unique, passwordHash
-  status              // pending | active   ← 운영자 수동 승인
-  igAccounts IgAccount[]
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  status       UserStatus @default(PENDING)   // 운영자가 수동 승인
+  igAccounts   IgAccount[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 }
 
 model IgAccount {
-  id, userId, igUserId @unique, username
-  slug @unique                  // webhook 경로: /webhook/:slug
-  accessTokenEnc, appSecretEnc  // AES-256-GCM 암호화 저장
-  verifyToken
-  status                        // draft | connected | error
-  subscribedAt, lastCheckedAt
-  // 계정 기본 문구 (캠페인이 없을 때 폴백)
-  defaultPrivateReplyText, defaultFollowUpText
-  campaigns, conversations, events
+  id       String  @id @default(cuid())
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  igUserId String  @unique          // Meta webhook 의 entry[].id
+  username String?
+  slug     String  @unique          // webhook 경로 /webhook/:slug
+
+  accessTokenEnc String              // AES-256-GCM 암호문
+  appSecretEnc   String
+  verifyToken    String
+
+  status         AccountStatus @default(DRAFT)
+  subscribedAt   DateTime?           // subscribed_apps 호출 성공 시각
+  tokenExpiresAt DateTime?           // 60일 만료 경고용
+  lastCheckedAt  DateTime?
+
+  defaultPrivateReplyText String?     // 캠페인에 없을 때 폴백
+  defaultFollowUpText     String?
+
+  campaigns     Campaign[]
+  conversations Conversation[]
+  sentReplies   SentReply[]
+  events        Event[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-model Campaign {                // ← UI에서는 "자동 DM"이라 부른다 (why.md 원칙 1)
-  id, igAccountId
-  mediaId, permalink, thumbnailUrl, label
-  triggerKeywords String[]      // 비어 있으면 모든 댓글
-  privateReplyText String?      // null이면 계정 기본값
-  followUpText                  // ← 사용자가 입력하는 "보낼 DM"
-  enabled
+/// UI에서는 "자동 DM"이라고 부른다 (why.md 원칙 1)
+model Campaign {
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+
+  mediaId      String
+  permalink    String
+  thumbnailUrl String?
+  caption      String?                       // 목록에서 어느 글인지 알아보게
+  label        String?
+
+  triggerKeywords  String[] @default([])     // 비면 모든 댓글
+  privateReplyText String?                   // null 이면 계정 기본값
+  followUpText     String                    // 사용자가 입력하는 "보낼 DM"
+  enabled          Boolean  @default(true)
+
+  events Event[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@unique([igAccountId, mediaId])
 }
 
 model Conversation {
-  id, igAccountId, igsid
-  state                         // WAITING_USER_MESSAGE | USER_REPLIED | FORM_SENT
-  lastCommentId
-  lastMediaId, lastCampaignId   // ← 게시물별 문구가 성립하는 이유. 아래 참조
-  updatedAt
-  @@unique([igAccountId, igsid])
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+  igsid       String
+
+  state          ConversationState
+  lastCommentId  String?
+  lastMediaId    String?             // ← 게시물별 문구가 성립하는 이유
+  lastCampaignId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([igAccountId, igsid])     // 조건부 UPDATE 의 키
 }
 
-model SentReply {               // Private Reply 멱등성 마커
-  igAccountId, commentId, createdAt
+/// Private Reply 멱등성 마커. 행의 존재 자체가 "이미 보냄"을 뜻한다
+model SentReply {
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+  commentId   String
+  createdAt   DateTime  @default(now())
+
   @@id([igAccountId, commentId])
 }
 
-model Event {                   // ★ 이 프로젝트의 핵심 자산 — 활동 피드 + 퍼널 분석의 원천
-  id, igAccountId
-  campaignId?, mediaId          // mediaId는 비정규화: 캠페인을 지워도 과거 통계가 남는다
-  igsid                         // 같은 사람의 퍼널을 이어붙이는 키
-  username?                     // 활동 피드/CSV 실용성. 댓글 작성자는 공개 정보
-  type                          // COMMENT_RECEIVED | COMMENT_SKIPPED | PRIVATE_REPLY_SENT
-                                // | USER_REPLIED | FOLLOW_UP_SENT | FAILED
-  skipReason?                   // SELF_COMMENT | NO_KEYWORD_MATCH | DUPLICATE | CAMPAIGN_DISABLED | ECHO
-  errorCode?, latencyMs?
-  createdAt
-  @@index([igAccountId, createdAt])
-  @@index([igAccountId, mediaId, type])
+/// ★ 활동 피드 + 퍼널 분석의 원천. 기록하지 않은 과거는 복원되지 않는다
+model Event {
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  mediaId    String?                 // 비정규화 — 캠페인을 지워도 통계가 남는다
+
+  igsid    String?
+  username String?                   // 활동 피드/CSV 실용성. 본문은 저장하지 않는다
+
+  type       EventType
+  skipReason SkipReason?             // "왜 DM이 안 갔지?" 에 답하는 열
+  errorCode  String?
+  latencyMs  Int?
+  isFollower Boolean?                // Phase 3. 반응 시점 값을 박제 — 나중에 조회하면 변한다
+
+  createdAt DateTime @default(now())
+
+  @@index([igAccountId, createdAt])          // 활동 피드
+  @@index([igAccountId, mediaId, type])      // 퍼널 GROUP BY
 }
 ```
 
-### `COMMENT_SKIPPED`를 반드시 남긴다
+### 지금 확정해야 하는 것과 나중에 해도 되는 것
 
-**"왜 DM이 안 갔지?"가 지인들이 가장 많이 할 질문**이다. 이 행이 없으면 매번 CloudWatch를 뒤져야 한다.
-`skipReason`을 사람이 읽는 말로 바꿔 대시보드에 그대로 보여준다.
+가르는 기준은 **"나중에 붙일 때 과거 데이터를 버려야 하는가"** 다.
+
+| | |
+|---|---|
+| **지금** | `Event`의 열 전부 (`skipReason` `mediaId` `latencyMs` `isFollower`). 기록하지 않은 과거는 소급 생성이 불가능하다 |
+| **지금** | 모든 테이블의 `igAccountId` 스코프. 나중에 넣으면 키 설계를 통째로 바꿔야 한다 |
+| 나중 | Phase 3의 계정 인사이트 스냅샷 — **새 테이블**이라 백필 문제가 없다 |
+| 나중 | 온보딩 UI·결제·OAuth — 데이터 모델이 바뀌지 않는다 |
 
 ### 개인정보 원칙
 
 **댓글 작성자의 `username`은 저장하고, 댓글·DM 본문은 저장하지 않는다.**
-활동 피드와 CSV의 실용성은 username에서 나오고, 위험은 본문에서 나온다. 로그에도 본문을 남기지 않는다.
+활동 피드와 CSV의 실용성은 username에서 나오고, 위험은 본문에서 나온다. 로그도 마찬가지다.
 
 ---
 
