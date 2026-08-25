@@ -8,11 +8,13 @@
     "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.ts\"",
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:db": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.dbtest.ts\""
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1117.0",
     "@aws-sdk/client-sqs": "^3.1117.0",
+    "@codegenie/serverless-express": "^5.0.0",
     "@nestjs/common": "^11.2.1",
     "@nestjs/core": "^11.2.1",
     "@nestjs/platform-express": "^11.2.1",
@@ -24,6 +26,8 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.24",
+    "@types/aws-lambda": "^8.10.162",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
     "prisma": "7",
     "typescript": "5.9.3"
