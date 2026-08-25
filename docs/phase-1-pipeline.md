@@ -44,8 +44,8 @@
 > `prisma migrate dev` 가 그대로 돌았다. 별도 `shadowDatabaseUrl` 불필요.
 
 ### 3. 수신 경로
-- [ ] `webhook/signature.ts` — HMAC, **App Secret 2종 시도**, `isBase64Encoded` 처리
-- [ ] `webhook/normalize.ts` — payload → `BotEvent[]`. **순수 함수로 유지** (테스트 핵심)
+- [x] `webhook/signature.ts` — HMAC, **App Secret 2종 시도**, `rawBody()` 로 base64 처리
+- [x] `webhook/normalize.ts` — payload → `{ events, skipped }`. 버린 것도 `skipReason` 과 함께 반환한다
 - [ ] `webhook/webhook.controller.ts` — `GET`(verify) / `POST`(서명 → normalize → SQS). **항상 200**
 - [ ] `slug` → 계정 조회 (경로에서 테넌트 확정 후 서명 검증)
 
@@ -58,8 +58,8 @@
 - [ ] `lambda/http.ts`, `lambda/sqs.ts` 어댑터
 
 ### 5. 테스트 (`node --test`)
-- [ ] `normalize` — 정상 댓글 / **셀프 댓글** / **is_echo** / 텍스트 없는 메시지 / 다중 entry·changes
-- [ ] `signature` — App Secret 2종 각각 통과, 위조 실패, base64 body
+- [x] `normalize` 17건 — 셀프 댓글 · is_echo/is_self · sender 동일성 · NO_TEXT · verb=remove · 다중 entry · 쓰레기 입력
+- [x] `signature` 13건 — 2종 각각 통과 · 위조 · base64 · 길이 불일치 예외 없음 · 재직렬화 회귀
 - [ ] 문구 3단 폴백 — 캠페인 > 계정 > 기본, 필드 단위 병합
 - [ ] 멱등성 — 중복 댓글 1회만 발송, retryable 실패 시 마커 삭제 후 throw, 상태 안 맞으면 미발송
 
