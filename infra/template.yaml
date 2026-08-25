@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ig-comment-bot Phase 1 — webhook (Function URL) + SQS worker.
+  No VPC (NAT Gateway costs money for no benefit here), no CloudFront/S3
+  (web app is Phase 2). Region is ap-southeast-1 to sit next to Neon.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures: [arm64]
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        # Secret itself is NOT created here — an operator creates it out-of-band
+        # via the CLI so its value never lands in a CloudFormation template/state.
+        APP_SECRET_ID: !Sub "ig-comment-bot/${Environment}/app"
+        EVENT_QUEUE_URL: !Ref EventQueue
+        NODE_OPTIONS: --enable-source-maps
+
+Resources:
+  # ── SQS ─────────────────────────────────────────────────────────
+  EventDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "ig-comment-bot-events-dlq-${Environment}"
+
+  EventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "ig-comment-bot-events-${Environment}"
+      # 6x the Worker's 30s timeout, per SQS's own recommendation.
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EventDlq.Arn
+        maxReceiveCount: 5
+
+  # ── Log groups (created before the functions that write to them) ─
+  # Undeclared, Lambda would auto-create these with NO retention limit
+  # on first invoke — the only real cost risk in this stack otherwise
+  # sitting inside free tiers. DependsOn below forces this to exist
+  # first so the function's first invocation reuses it instead of a
+  # race where Lambda creates its own (unmanaged, infinite-retention)
+  # log group before this resource lands.
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/ig-comment-bot-${Environment}-Api"
+      RetentionInDays: 7
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/ig-comment-bot-${Environment}-Worker"
+      RetentionInDays: 7
+
+  # ── Lambda: API (webhook receiver, future REST API) ───────────────
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: !Sub "ig-comment-bot-${Environment}-Api"
+      CodeUri: ../apps/api/dist
+      Handler: lambda/http.handler
+      FunctionUrlConfig:
+        AuthType: NONE  # Meta calls this directly; it can't sign SigV4
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt EventQueue.QueueName
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ig-comment-bot/${Environment}/app-*"
+
+  # ── Lambda: Worker (SQS consumer) ─────────────────────────────────
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: !Sub "ig-comment-bot-${Environment}-Worker"
+      CodeUri: ../apps/api/dist
+      Handler: lambda/sqs.handler
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt EventQueue.QueueName
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:ig-comment-bot/${Environment}/app-*"
+      Events:
+        EventQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EventQueue.Arn
+            BatchSize: 10
+            # A bad message in a batch fails only itself, not the whole
+            # batch — otherwise one poison message keeps re-delivering
+            # nine good ones until the DLQ eats all ten.
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+Outputs:
+  ApiFunctionUrl:
+    Description: Function URL — register this as the Meta webhook endpoint
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  EventQueueUrl:
+    Description: SQS queue URL for webhook events
+    Value: !Ref EventQueue
+  EventDlqUrl:
+    Description: Dead-letter queue URL (should stay empty)
+    Value: !Ref EventDlq
+  ApiFunctionName:
+    Description: API Lambda function name (for log tailing)
+    Value: !Ref ApiFunction
+  WorkerFunctionName:
+    Description: Worker Lambda function name (for log tailing)
+    Value: !Ref WorkerFunction
