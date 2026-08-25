@@ -68,7 +68,12 @@ model IgAccount {
   // AES-256-GCM 암호문. 평문은 어디에도 저장하지 않습니다.
   accessTokenEnc String
   appSecretEnc   String
-  verifyToken    String
+  // 드물게 앱 구성에 따라 이 계정 서명 키가 appSecretEnc 가 아니라 상위 Meta App
+  // Secret 일 수 있다 (meta-api.md #7). 계정별 값이라 여기 둔다 — 플랫폼
+  // 전역 값일 수 없다. 각 고객이 자기 Meta 앱을 갖는 멀티테넌트 구조이기 때문.
+  // 없으면(대부분) appSecretEnc 만으로 검증한다.
+  parentAppSecretEnc String?
+  verifyToken        String
 
   status         AccountStatus @default(DRAFT)
   subscribedAt   DateTime? // subscribed_apps 호출 성공 시각

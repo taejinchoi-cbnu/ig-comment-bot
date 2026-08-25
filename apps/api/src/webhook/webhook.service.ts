@@ -1,6 +1,6 @@
 import type { AccountLookup, ResolvedAccount } from './account.service.ts';
 import { resolveAccountBySlug } from './account.service.ts';
-import { normalize, type NormalizeResult } from './normalize.ts';
+import { normalize, type BotEvent, type NormalizeResult } from './normalize.ts';
 import { verifySignature } from './signature.ts';
 import type { EventProducer } from '../queue/producer.ts';
 import type { PrismaClient } from '../generated/prisma/client.ts';
@@ -75,18 +75,24 @@ export async function handleReceive(
 
   await recordSkipped(result, account, deps);
 
+  let enqueued = 0;
   if (result.events.length > 0) {
     const outcome = await deps.producer.enqueue(result.events);
+    enqueued = outcome.successful;
     if (outcome.failed.length > 0) {
-      // enqueue 실패는 삼키되 사유는 남깁니다. 비200 을 돌려주면 Meta 가 구독을 끊습니다.
+      // 비200 을 돌려주면 Meta 가 구독을 끊으므로 여기서 throw 하지 않습니다.
+      // 대신 실제로 유실됐다는 사실을 Event 에 남깁니다 — 그러지 않으면
+      // "댓글은 왔는데 DM 이 안 갔다"가 어떤 기록에도 안 남는 채로 사라집니다.
       console.error('일부 이벤트를 큐에 넣지 못했습니다', {
         slug,
         failed: outcome.failed.map((f) => f.reason),
       });
+      await recordEnqueueFailures(outcome.failed, account, deps);
     }
   }
 
-  return { status: 200, enqueued: result.events.length, skipped: result.skipped.length };
+  // 실제로 큐에 들어간 수를 돌려줍니다. enqueue 가 일부 실패하면 시도한 수와 달라집니다.
+  return { status: 200, enqueued, skipped: result.skipped.length };
 }
 
 /**
@@ -117,5 +123,32 @@ async function recordSkipped(
   } catch (cause) {
     // 통계 기록 실패가 수신을 막으면 안 됩니다.
     console.error('skipped 이벤트 기록 실패', { cause: String(cause) });
+  }
+}
+
+/**
+ * SQS 로 못 들어간 이벤트를 FAILED 로 남깁니다. 여기서는 계정이 이미 확정돼 있으므로
+ * (resolveAccountBySlug 를 이미 통과했다) sqs.ts 의 "계정 없음" 경로와 달리 Event 를
+ * 쓸 수 있습니다 — igAccountId FK 를 만족시킬 행이 있습니다.
+ */
+async function recordEnqueueFailures(
+  failed: readonly { event: BotEvent; reason: string }[],
+  account: ResolvedAccount,
+  deps: WebhookDeps,
+): Promise<void> {
+  try {
+    await deps.prisma.event.createMany({
+      data: failed.map(({ event, reason }) => ({
+        igAccountId: account.handler.id,
+        type: 'FAILED' as const,
+        mediaId: event.kind === 'COMMENT' ? event.mediaId : null,
+        igsid: event.igsid,
+        username: event.kind === 'COMMENT' ? (event.username ?? null) : null,
+        errorCode: `ENQUEUE_FAILED: ${reason}`.slice(0, 512),
+      })),
+    });
+  } catch (cause) {
+    // 통계 기록 실패가 수신을 막으면 안 됩니다.
+    console.error('enqueue 실패 이벤트 기록 실패', { cause: String(cause) });
   }
 }

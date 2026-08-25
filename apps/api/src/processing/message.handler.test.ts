@@ -54,6 +54,8 @@ function buildCampaign(overrides: Partial<HandlerCampaign> = {}): HandlerCampaig
 function buildCtx(opts: {
   conversation?: ConversationRow | null;
   campaigns?: Record<string, HandlerCampaign>;
+  /** 각 캠페인을 소유한 계정. 없으면 ACCOUNT_ID 소유로 간주한다. */
+  campaignOwners?: Record<string, string>;
   account?: HandlerAccount;
   sendMessageImpl?: (igsid: string, text: string) => Promise<{ recipientId: string; messageId: string }>;
   now?: () => number;
@@ -95,9 +97,14 @@ function buildCtx(opts: {
       },
     },
     campaign: {
-      findUnique: async ({ where }: { where: { id: string } }) => {
+      // 실제 message.handler.ts 는 findFirst({ where: { id, igAccountId } }) 를 쓴다.
+      // igAccountId 가 안 맞으면 null 을 돌려줘야 테넌트 격리 회귀를 잡을 수 있다.
+      findFirst: async ({ where }: { where: { id: string; igAccountId: string } }) => {
         calls.push('findCampaign');
-        return campaigns[where.id] ?? null;
+        const campaign = campaigns[where.id];
+        if (!campaign) return null;
+        const owner = opts.campaignOwners?.[where.id] ?? ACCOUNT_ID;
+        return owner === where.igAccountId ? campaign : null;
       },
     },
     sentReply: {},
@@ -327,4 +334,32 @@ test('예상 밖 예외도 롤백하고 throw 한다 — comment 핸들러와 �
     events.find((e) => e.type === 'FAILED'),
     'FAILED 가 기록되어야 한다',
   );
+});
+
+test('테넌트 격리: lastCampaignId 가 다른 계정 소유 캠페인을 가리키면 그 문구를 쓰지 않는다', async () => {
+  // 정상 경로에서는 있을 수 없다 — comment.handler.ts 는 항상 자기 계정의 캠페인만
+  // lastCampaignId 에 쓴다. 하지만 findFirst 에 igAccountId 필터가 빠지면 이 시나리오에서
+  // 남의 계정 문구가 새어 나간다. 그 방어선이 실제로 동작하는지 확인한다.
+  const foreignCampaign = buildCampaign({ id: 'camp_other', followUpText: '남의 계정 문구 — 절대 나가면 안 됨' });
+  const { ctx, calls } = buildCtx({
+    conversation: {
+      igAccountId: ACCOUNT_ID,
+      igsid: IGSID,
+      state: 'WAITING_USER_MESSAGE',
+      lastMediaId: 'media_1',
+      lastCampaignId: 'camp_other',
+    },
+    campaigns: { camp_other: foreignCampaign },
+    campaignOwners: { camp_other: 'acc_다른계정' },
+    account: buildAccount({ defaultFollowUpText: '계정 기본 후속 문구' }),
+    sendMessageImpl: async (_igsid, text) => {
+      assert.notEqual(text, foreignCampaign.followUpText, '남의 계정 캠페인 문구가 나가면 안 된다');
+      assert.equal(text, '계정 기본 후속 문구', '계정 스코프에 없으니 계정 기본값으로 폴백해야 한다');
+      return { recipientId: 'r', messageId: 'm' };
+    },
+  });
+
+  await handleMessage(buildEvent(), ctx);
+  assert.ok(calls.includes('findCampaign'));
+  assert.ok(calls.includes('sendMessage'), '검증은 sendMessageImpl 안에서 이뤄진다');
 });

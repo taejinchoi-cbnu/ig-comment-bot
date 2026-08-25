@@ -9,7 +9,8 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "postinstall": "prisma generate",
-    "test:db": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.dbtest.ts\""
+    "test:db": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.dbtest.ts\"",
+    "build:lambda": "esbuild src/lambda/http.ts src/lambda/sqs.ts --bundle --platform=node --target=node24 --format=cjs --outdir=dist-lambda --entry-names='[name]' --external:@nestjs/microservices --external:@nestjs/websockets --external:class-validator --external:class-transformer"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1117.0",
@@ -29,6 +30,7 @@
     "@types/aws-lambda": "^8.10.162",
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "prisma": "7",
     "typescript": "5.9.3"
   }

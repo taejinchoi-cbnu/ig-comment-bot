@@ -380,8 +380,30 @@ Claude Design 결과가 나오면 클래스만 교체하면 되도록.
 
 SAM CLI를 설치하지 않는다. SAM transform은 CloudFormation이 서버 측에서 처리하므로 `CAPABILITY_AUTO_EXPAND`면 충분하다.
 
+**Lambda 코드는 `nest build`가 아니라 esbuild로 번들링한다.** `nest build`는 컴파일만 하고
+`node_modules`를 담지 않는데, `CodeUri`가 가리키는 디렉터리 전체가 그대로 zip 되므로
+그 상태로 배포하면 콜드스타트에서 `Cannot find module 'reflect-metadata'` 로 죽는다.
+
 ```bash
-pnpm -F api build && pnpm -F web build
+# apps/api/package.json 의 build:lambda 스크립트
+esbuild src/lambda/http.ts src/lambda/sqs.ts \
+  --bundle --platform=node --target=node24 --format=cjs \
+  --outdir=dist-lambda --entry-names='[name]' \
+  --external:@nestjs/microservices --external:@nestjs/websockets \
+  --external:class-validator --external:class-transformer
+```
+
+`--external` 네 개는 코드가 필요로 하는 게 아니라 **NestJS 자신이** 마이크로서비스·웹소켓·
+검증 파이프를 선택적으로 지원하려고 내부에서 `require()`로 찔러보는 패키지들이다.
+우리는 설치조차 안 했으므로 esbuild가 정적 분석 시점에 못 찾아 죽는데, Nest 쪽이 이미
+그 호출을 try/catch로 감싸두었으니 `--external`로 넘겨 런타임에 도달하지 않게 두면 된다.
+
+번들링이 가능한 이유는 Prisma 7의 driver adapter(`@prisma/adapter-pg`) 방식이 네이티브
+바이너리(`libquery_engine.*.node`)를 쓰지 않는 순수 JS 경로라서다. 네이티브 바이너리가 있었다면
+esbuild 번들 안에 안 들어가 별도 처리가 필요했을 것이다.
+
+```bash
+pnpm -F @ig/api build:lambda   # apps/api/dist-lambda 에 http.js / sqs.js 생성
 
 aws cloudformation package --template-file infra/template.yaml \
   --s3-bucket "$ARTIFACT_BUCKET" --output-template-file packaged.yaml
@@ -391,9 +413,14 @@ aws cloudformation deploy --template-file packaged.yaml \
   --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
   --parameter-overrides Environment=dev
 
+# Phase 2 이후 — 웹 배포
 aws s3 sync apps/web/dist "s3://$WEB_BUCKET" --delete
 aws cloudfront create-invalidation --distribution-id "$CF_ID" --paths '/*'
 ```
+
+`scripts/deploy.sh` 가 위 흐름을 그대로 실행한다. `Environment` 은 `ops/deploy.env` 의
+`ENVIRONMENT` 값을 따른다 (기본 `dev`) — `STACK_NAME` 을 prod로 바꿨는데 `Environment`
+을 안 바꾸면 prod 스택이 dev의 Secrets Manager 항목을 참조하게 된다.
 
 IAM은 배포 전용 유저 `ig-bot-deployer` 1개 + CI용 OIDC Role 1개.
 

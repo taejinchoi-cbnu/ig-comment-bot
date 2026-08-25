@@ -34,7 +34,7 @@ React + Vite + TS / NestJS + TS / PostgreSQL + Prisma / AWS Lambda + SQS + Cloud
 | Phase | 내용 | 상태 | 완료 기준 |
 |---|---|---|---|
 | 0 | 문서화 + repo 준비 | ✅ 완료 | 이 문서만 보고 Phase 1을 시작할 수 있다 |
-| [1](./phase-1-pipeline.md) | 파이프라인 (웹 없음) | ⬜ 준비물 완료, 착수 대기 | 실제 댓글 → 1차 DM → 답장 → 후속 DM. 중복·셀프·echo 전부 걸러짐 |
+| [1](./phase-1-pipeline.md) | 파이프라인 (웹 없음) | 🟡 코드·인프라·`/code-review` 반영 완료 — Wave 4(Meta 연결·배포·E2E)만 남음 | 실제 댓글 → 1차 DM → 답장 → 후속 DM. 중복·셀프·echo 전부 걸러짐 |
 | [2](./phase-2-web.md) | 웹 | ⬜ 대기 | **지인 1명이 나 없이 자기 게시글에 자동 DM을 건다** |
 | [3](./phase-3-analytics.md) | 성과 분석 ★ | ⬜ 대기 | 지인이 "이 게시글 효과 있었어?"에 대시보드만 보고 답한다 |
 | [4](./phase-4-later.md) | 그 다음 | ⬜ 대기 | — |

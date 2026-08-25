@@ -37,8 +37,15 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
     where: { igAccountId_igsid: { igAccountId, igsid } },
   });
 
+  // findUnique(id) 가 아니라 findFirst 로 igAccountId 를 같이 건다. Campaign.id 는
+  // 전역 고유(cuid)라 지금은 결과가 같지만, 여기서 테넌트 필터를 생략하면
+  // "모든 쿼리는 igAccountId 스코프" 라는 불변식이 이 경로에서만 깨진다.
+  // lastCampaignId 는 지금은 항상 같은 계정의 캠페인에서만 채워지지만,
+  // 그 보장이 DB 제약이 아니라 comment.handler.ts 의 쓰기 로직에만 있다 —
+  // 나중에 다른 쓰기 경로(운영 툴, 마이그레이션)가 이 불변식을 깨면
+  // 이 필터가 남의 계정 캠페인 문구가 새는 것을 막는 마지막 방어선이다.
   const campaign = conversation?.lastCampaignId
-    ? await ctx.prisma.campaign.findUnique({ where: { id: conversation.lastCampaignId } })
+    ? await ctx.prisma.campaign.findFirst({ where: { id: conversation.lastCampaignId, igAccountId } })
     : null;
 
   const templates = resolveTemplates(ctx.account, campaign);

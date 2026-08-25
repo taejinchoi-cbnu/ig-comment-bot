@@ -1,9 +1,14 @@
 # Phase 1 — 파이프라인 (웹 없음)
 
-> **상태**: 대기   |   **선행**: Phase 0 (문서화)
+> **상태**: 코드·인프라·`/code-review medium` 반영까지 완료. **다음 세션은 Wave 4(Meta 연결 → 배포 → E2E)부터.**
+> |   **선행**: Phase 0 (문서화)
 >
 > **완료 기준**: 두 번째 인스타 계정으로 실제 댓글을 달면 1차 DM이 오고, 답장하면 후속 DM이 오며,
 > 중복·셀프 댓글·echo가 전부 걸러진다. DLQ는 비어 있다.
+>
+> **다음 세션 시작점**: [§8 코드 리뷰 반영](#8-코드-리뷰-반영-code-review-medium-) 을 먼저 훑고
+> [§7 Meta 연결](#7-meta-연결) 3항목부터 진행한다. `pnpm verify`(169건) · `pnpm -F @ig/api test:db`(8건)
+> · `pnpm -F @ig/api build:lambda` 스모크 테스트까지 전부 이 세션에서 통과 확인했다.
 
 ## 목표
 
@@ -63,14 +68,37 @@
 - [ ] 문구 3단 폴백 — 캠페인 > 계정 > 기본, 필드 단위 병합
 - [ ] 멱등성 — 중복 댓글 1회만 발송, retryable 실패 시 마커 삭제 후 throw, 상태 안 맞으면 미발송
 
-### 6. 인프라
-- [ ] `infra/template.yaml` — Lambda×2 · SQS + DLQ(`maxReceiveCount: 5`, visibility 180s) · Function URL · **LogGroup retention 7일**
+### 6. 인프라 ✅
+- [x] `infra/template.yaml` — Lambda×2 · SQS + DLQ(`maxReceiveCount: 5`, visibility 180s) · Function URL · **LogGroup retention 7일**
+- [x] `scripts/deploy.sh` 가 `pnpm -F @ig/api build:lambda`(esbuild 번들, [`architecture.md`](./architecture.md) §배포) 를 호출하도록 연결.
+  `nest build` 산출물은 `node_modules` 를 안 담아 그대로 배포하면 콜드스타트에서 죽는다는 걸
+  실제 Function URL 이벤트로 부팅해서 확인 후 고쳤다.
 - [ ] 배포 후 Function URL 확보
 
-### 7. Meta 연결
+### 7. Meta 연결 ← **다음 세션 여기부터**
 - [ ] [`meta-api.md`](./meta-api.md) §4 절차 1~6 수행 (권한에 `instagram_business_manage_insights` 포함 — Phase 3에서 필요) (**6번 `subscribed_apps` 빠뜨리지 말 것**)
 - [ ] 두 번째 계정을 **Instagram Tester로 초대 → 수락**
-- [ ] 계정 1개 + 캠페인 2개(문구가 서로 다르게)를 SQL로 직접 삽입
+- [ ] 계정 1개 + 캠페인 2개(문구가 서로 다르게)를 SQL로 직접 삽입.
+  `IgAccount.parentAppSecretEnc` 는 보통 비워둔다(§8의 #5) — 403이 계속될 때만 채운다.
+
+### 8. 코드 리뷰 반영 (`/code-review medium`) ✅
+
+Wave 3 직후 돌린 리뷰에서 나온 8건을 전부 확인·반영했다. **1번이 제일 심각했다** —
+그대로 배포했으면 Lambda가 콜드스타트에서 바로 죽었을 것이다.
+
+| # | 문제 | 조치 |
+|---|---|---|
+| 1 ★ | `nest build` 산출물엔 `node_modules` 가 없는데 `CodeUri` 가 그걸 통째로 zip 함 → 배포하면 `Cannot find module 'reflect-metadata'` | esbuild로 완전 번들링(`build:lambda`). Prisma 7 driver adapter라 네이티브 바이너리가 없어 번들 가능했다. NestJS가 선택적으로 `require()`하는 microservices/websockets/validator는 `--external`로 넘긴다(Nest 자체가 try/catch로 감싸둠). **실제 Function URL 이벤트로 부팅해서 `/health` 200 확인 완료** |
+| 2 | SQS 워커가 모르는 계정의 이벤트를 로그만 남기고 버림 — `Event` 도 못 남김 | `igAccountId` 가 필수 FK라 애초에 못 씀(계정이 없으니 참조할 행이 없다). 상관관계 잡을 값을 전부 실어 `console.error` 로 격상, 이유를 주석으로 명시 |
+| 3 | SQS enqueue 부분 실패 시 `Event` 기록 없음, `enqueued` 카운트가 시도 수를 돌려줌 | `FAILED` 이벤트로 기록, `enqueued` 를 실제 성공 수(`outcome.successful`)로 수정. 테스트 2건 추가 |
+| 4 ★ | `message.handler.ts` 가 캠페인을 `id` 만으로 조회 — 테넌트 필터 없음 (comment.handler는 있음) | `findFirst({ id, igAccountId })` 로 방어선 추가. **필터를 빼면 실제로 남의 캠페인 문구가 새는 것**을 별도 재현 테스트로 확인 후 고쳤고, 커밋된 테스트는 고친 코드가 막아내는지 검증한다 |
+| 5 | `META_APP_SECRET` 전역 환경변수를 참조하지만 `template.yaml` 어디에도 정의 안 됨 — 항상 `undefined` |애초에 전역 변수가 아키텍처와 안 맞았다(테넌트마다 다른 Meta 앱). `IgAccount.parentAppSecretEnc`(nullable) 로 계정별 필드화. 마이그레이션 `20260825114031_add_parent_app_secret` |
+| 6 | webhook 경로가 쓰지도 않는 `accessToken` 을 매번 복호화 — 실패하면 정상 서명도 404 | `account.service.ts` 에서 제거. 워커(`sqs.ts`)는 원래 따로 복호화해서 발송에 쓰므로 영향 없음 |
+| 7 | `deploy.sh` 가 `STACK_NAME` 과 무관하게 항상 `Environment=dev` | `ops/deploy.env` 의 `ENVIRONMENT` 를 따르도록(기본 dev, `dev\|prod` 검증) |
+| 8 | "실패는 캐시 안 하는 모듈 스코프 비동기 메모이즈" 패턴이 4곳에 손카피 | `src/lib/memoize-async.ts` 로 통합, 4곳 리팩터 + 자체 테스트 5건 |
+
+★ 표시 2건은 배포/실사용에서 실제로 터졌을 문제라 특히 중요했다.
+자세한 판단 근거는 커밋 메시지(`git log --oneline` 최상단 근처)에 있다.
 
 ## 검증
 

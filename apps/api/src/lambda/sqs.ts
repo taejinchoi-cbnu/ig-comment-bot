@@ -53,7 +53,19 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
       if (!ctx) {
         // 계정이 사라졌거나 연결이 해제됐습니다. 재시도해도 달라지지 않으므로
         // 실패로 보고하지 않고 넘깁니다 — DLQ 로 보내봐야 노이즈입니다.
-        console.warn('알 수 없는 계정의 이벤트를 건너뜁니다', { igUserId: botEvent.igUserId });
+        //
+        // Event 에는 못 남깁니다: igAccountId 는 필수 FK(→ IgAccount.id)라
+        // 참조할 계정이 없으면 쓰기 자체가 실패합니다. 스키마를 nullable 로 풀면
+        // "모든 쿼리는 igAccountId 스코프" 불변식이 깨지므로 하지 않습니다.
+        // 대신 상관관계를 잡을 수 있는 값을 전부 실어 error 레벨로 남깁니다 —
+        // 이게 이 경로에서 낼 수 있는 최선의 진단 기록입니다.
+        console.error('알 수 없는 계정의 이벤트를 건너뜁니다', {
+          igUserId: botEvent.igUserId,
+          kind: botEvent.kind,
+          identifier: botEvent.kind === 'COMMENT' ? botEvent.commentId : botEvent.messageId,
+          igsid: botEvent.igsid,
+          sqsMessageId: record.messageId,
+        });
         continue;
       }
 

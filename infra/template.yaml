@@ -67,8 +67,8 @@ Resources:
     DependsOn: ApiLogGroup
     Properties:
       FunctionName: !Sub "ig-comment-bot-${Environment}-Api"
-      CodeUri: ../apps/api/dist
-      Handler: lambda/http.handler
+      CodeUri: ../apps/api/dist-lambda
+      Handler: http.handler
       FunctionUrlConfig:
         AuthType: NONE  # Meta calls this directly; it can't sign SigV4
       Policies:
@@ -83,8 +83,8 @@ Resources:
     DependsOn: WorkerLogGroup
     Properties:
       FunctionName: !Sub "ig-comment-bot-${Environment}-Worker"
-      CodeUri: ../apps/api/dist
-      Handler: lambda/sqs.handler
+      CodeUri: ../apps/api/dist-lambda
+      Handler: sqs.handler
       Policies:
         - SQSPollerPolicy:
             QueueName: !GetAtt EventQueue.QueueName

@@ -19,7 +19,7 @@
 | 4 | **echo 필터** | 봇이 보낸 DM이 `messaging[].message.is_echo === true` (`is_self`도) 로 되돌아옴 | **무한루프.** 자기 메시지에 자기가 반응 |
 | 5 | **셀프 댓글 필터** | 내 계정이 내 글에 단 댓글도 webhook이 발사됨. `value.from.id === entry.id` 로 판별 | 자기 자신에게 DM 시도 → 실패 + 로그 오염 |
 | 6 | **계정 구독** | App Dashboard의 필드 구독만으로는 부족. 계정마다 `POST /v25.0/me/subscribed_apps?subscribed_fields=comments,messages` 필요 | **webhook이 아예 안 온다.** 가장 흔한 삽질 |
-| 7 | **App Secret 2종** | 앱 구성에 따라 서명 키가 Instagram app secret **또는 상위 Meta app secret**. 둘 다 시도해야 함 | 403만 반복되고 원인 파악이 오래 걸림 |
+| 7 | **App Secret 2종** | 앱 구성에 따라 서명 키가 Instagram app secret **또는 상위 Meta app secret**. 둘 다 시도해야 함. **계정마다 다른 Meta 앱을 쓰므로 계정별 값**이다 — `IgAccount.parentAppSecretEnc`(nullable)에 둔다. 403이 계속되면 이걸 채워본다 | 403만 반복되고 원인 파악이 오래 걸림 |
 | 8 | raw body | Function URL / API Gateway가 body를 base64로 줄 수 있음. `isBase64Encoded` 확인 후 **디코드한 원본 바이트**로 HMAC | 서명 검증 전부 실패 |
 | 9 | Private Reply 창 | 댓글당 **1회만**, 게시물/릴스는 댓글 후 **7일 이내** (Live는 방송 중에만) | 400. 재시도해도 성공 안 함 |
 | 10 | 후속 메시지 창 | 사용자가 응답한 뒤에만 가능, 응답 후 **24시간 이내** | 400 |

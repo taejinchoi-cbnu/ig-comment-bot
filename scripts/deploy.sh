@@ -21,10 +21,19 @@ for var in AWS_PROFILE AWS_REGION STACK_NAME ARTIFACT_BUCKET; do
   fi
 done
 
+# Defaults to dev. Set ENVIRONMENT=prod in ops/deploy.env for a prod stack —
+# this must track STACK_NAME, or the deploy silently points a "prod" stack
+# at dev's Secrets Manager entry (APP_SECRET_ID uses ${Environment}).
+ENVIRONMENT="${ENVIRONMENT:-dev}"
+if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "prod" ]]; then
+  echo "error: ENVIRONMENT must be 'dev' or 'prod', got '$ENVIRONMENT'" >&2
+  exit 1
+fi
+
 AWS=(aws --profile "$AWS_PROFILE" --region "$AWS_REGION")
 
-echo "==> Building @ig/api"
-pnpm -F @ig/api build
+echo "==> Bundling Lambda functions (esbuild, environment: $ENVIRONMENT)"
+pnpm -F @ig/api build:lambda
 
 echo "==> Packaging (uploading Lambda code to s3://$ARTIFACT_BUCKET)"
 "${AWS[@]}" cloudformation package \
@@ -37,7 +46,7 @@ echo "==> Deploying stack $STACK_NAME"
   --template-file packaged.yaml \
   --stack-name "$STACK_NAME" \
   --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
-  --parameter-overrides Environment=dev
+  --parameter-overrides "Environment=${ENVIRONMENT}"
 
 echo "==> Outputs"
 "${AWS[@]}" cloudformation describe-stacks \

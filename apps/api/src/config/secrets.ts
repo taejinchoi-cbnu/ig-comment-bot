@@ -1,4 +1,5 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { memoizeAsync } from '../lib/memoize-async.ts';
 
 /**
  * AWS Secrets Manager 에서 앱 시크릿을 읽어옵니다.
@@ -30,28 +31,17 @@ type RawSecret = {
 };
 
 // Lambda 는 컨테이너를 재사용합니다. 호출마다 Secrets Manager 를 때리면 지연·비용이 늘어나므로
-// 모듈 스코프에 결과(Promise)를 캐시합니다. 진행 중인 Promise 를 그대로 재사용해 콜드 스타트
-// 직후 동시에 들어오는 여러 요청이 중복 fetch 를 하지 않게 합니다.
-let cached: Promise<AppSecrets> | null = null;
+// 모듈 스코프에 결과(Promise)를 캐시합니다 (lib/memoize-async.ts). 진행 중인 Promise 를 그대로
+// 재사용해 콜드 스타트 직후 동시에 들어오는 여러 요청이 중복 fetch 를 하지 않게 합니다.
+const secretsCache = memoizeAsync((opts: LoadSecretsOptions) => fetchSecrets(opts));
 
-export async function loadSecrets(opts: LoadSecretsOptions = {}): Promise<AppSecrets> {
-  if (cached) return cached;
-
-  const promise = fetchSecrets(opts);
-  cached = promise;
-  try {
-    return await promise;
-  } catch (err) {
-    // 실패는 캐시하지 않습니다 — 실패한 Promise 를 캐시로 남기면 컨테이너가 살아있는
-    // 내내 재시도조차 못 하고 계속 실패합니다.
-    cached = null;
-    throw err;
-  }
+export function loadSecrets(opts: LoadSecretsOptions = {}): Promise<AppSecrets> {
+  return secretsCache.run(opts);
 }
 
 /** 테스트에서 캐시를 비우기 위한 것. 운영 코드에서 쓰지 마라. */
 export function resetSecretsCache(): void {
-  cached = null;
+  secretsCache.reset();
 }
 
 async function fetchSecrets(opts: LoadSecretsOptions): Promise<AppSecrets> {

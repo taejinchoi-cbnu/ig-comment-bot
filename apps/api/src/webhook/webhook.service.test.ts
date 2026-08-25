@@ -13,7 +13,13 @@ const VERIFY_TOKEN = 'verify-token-xyz';
 
 type Captured = { enqueued: BotEvent[][]; events: Record<string, unknown>[] };
 
-function buildDeps(opts: { slugExists?: boolean } = {}): { deps: WebhookDeps; captured: Captured } {
+function buildDeps(
+  opts: {
+    slugExists?: boolean;
+    /** enqueue 결과를 흉내 냅니다. 기본은 전부 성공. */
+    enqueueResult?: (events: readonly BotEvent[]) => { successful: number; failed: { event: BotEvent; reason: string }[] };
+  } = {},
+): { deps: WebhookDeps; captured: Captured } {
   const captured: Captured = { enqueued: [], events: [] };
   const row = {
     id: 'acc_1',
@@ -41,6 +47,7 @@ function buildDeps(opts: { slugExists?: boolean } = {}): { deps: WebhookDeps; ca
       producer: {
         enqueue: async (events: readonly BotEvent[]) => {
           captured.enqueued.push([...events]);
+          if (opts.enqueueResult) return opts.enqueueResult(events);
           return { successful: events.length, failed: [] };
         },
       },
@@ -165,4 +172,47 @@ test('POST: base64 로 온 본문도 원본 바이트로 검증하면 통과한�
   const out = await handleReceive('abc123', raw, signBody(body, APP_SECRET), deps);
   assert.equal(out.status, 200);
   assert.equal(out.enqueued, 1);
+});
+
+test('POST: enqueue 가 일부 실패하면 실제 성공 수를 돌려주고 FAILED 로 기록한다', async () => {
+  const { deps, captured } = buildDeps({
+    enqueueResult: (events) => ({
+      successful: 0,
+      failed: events.map((event) => ({ event, reason: 'ThrottlingException' })),
+    }),
+  });
+  const body = commentBody();
+  const out = await handleReceive('abc123', Buffer.from(body), signBody(body, APP_SECRET), deps);
+
+  assert.equal(out.status, 200, 'enqueue 실패라도 Meta 에는 200 — 비200 이 반복되면 구독이 끊긴다');
+  assert.equal(out.enqueued, 0, '시도한 수가 아니라 실제로 큐에 들어간 수를 돌려준다');
+
+  const failedEvent = captured.events.find((e) => e.type === 'FAILED');
+  assert.ok(failedEvent, 'enqueue 실패도 Event 에 남아야 "왜 DM 이 안 갔지?" 에 답할 수 있다');
+  assert.equal(failedEvent?.igsid, THEM);
+  assert.match(String(failedEvent?.errorCode), /^ENQUEUE_FAILED:/);
+});
+
+test('POST: enqueue 부분 실패는 successful 개수를 정확히 반영한다', async () => {
+  const { deps } = buildDeps({
+    enqueueResult: (events) => ({
+      successful: events.length - 1,
+      failed: [{ event: events[events.length - 1]!, reason: 'InternalError' }],
+    }),
+  });
+  // 댓글 하나 + 메시지 하나 → 이벤트 2개
+  const body = JSON.stringify({
+    object: 'instagram',
+    entry: [
+      {
+        id: IG_USER_ID,
+        changes: [
+          { field: 'comments', value: { id: 'c1', text: '예약', from: { id: THEM }, media: { id: 'm1' } } },
+        ],
+        messaging: [{ sender: { id: THEM }, message: { mid: 'mid1', text: '네' } }],
+      },
+    ],
+  });
+  const out = await handleReceive('abc123', Buffer.from(body), signBody(body, APP_SECRET), deps);
+  assert.equal(out.enqueued, 1, '2건 중 1건만 성공했다면 1을 돌려줘야 한다');
 });
