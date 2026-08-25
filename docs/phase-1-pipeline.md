@@ -33,17 +33,15 @@
 어댑터 필수, `datasource.url`이 `prisma.config.ts`로 이동, `directUrl` 제거,
 `generator output` 필수, `dotenv` 명시적 로드. 자세히는 [`architecture.md`](./architecture.md) §Prisma 7 구성.
 
-- [ ] `prisma@7` `@prisma/client@7` `@prisma/adapter-pg` `dotenv` 설치
-- [ ] `prisma.config.ts` — `datasource.url` 에 **`DATABASE_URL_UNPOOLED`** (마이그레이션은 직결 필요)
-- [ ] `schema.prisma` — [`architecture.md`](./architecture.md) §데이터 모델 그대로
-- [ ] 첫 마이그레이션 → **테이블을 눈으로 확인하고 넘어간다**
-- [ ] `prisma/client.ts` — `PrismaPg` 어댑터에 **pooled** `DATABASE_URL`
+- [x] `prisma@7` `@prisma/client@7` `@prisma/adapter-pg` `dotenv` 설치
+- [x] `prisma.config.ts` — `datasource.url` 에 **`DATABASE_URL_UNPOOLED`** (마이그레이션은 직결 필요)
+- [x] `schema.prisma` — [`architecture.md`](./architecture.md) §데이터 모델 그대로
+- [x] 첫 마이그레이션 `20260825010816_init` — 테이블 6 · 인덱스 7 · enum 5 확인 완료
+- [x] `prisma/client.ts` — `PrismaPg` 어댑터에 **pooled** `DATABASE_URL` + `env.ts`(cwd 상향 탐색)
 - [ ] `crypto/` — AES-256-GCM 암복호화 + Secrets Manager 마스터 키 조회(모듈 스코프 캐시)
 
-> ⚠️ `prisma migrate dev` 는 shadow 데이터베이스를 만들었다 지운다.
-> Neon 역할에 `CREATE DATABASE` 권한이 없으면 실패한다.
-> 그 경우 `prisma.config.ts` 의 `datasource.shadowDatabaseUrl` 에 별도 DB를 지정하거나
-> `migrate diff` + `migrate deploy` 로 우회한다.
+> ✅ shadow 데이터베이스는 문제없었다. Neon 기본 역할(`neondb_owner`)에 `CREATE DATABASE` 권한이 있어
+> `prisma migrate dev` 가 그대로 돌았다. 별도 `shadowDatabaseUrl` 불필요.
 
 ### 3. 수신 경로
 - [ ] `webhook/signature.ts` — HMAC, **App Secret 2종 시도**, `isBase64Encoded` 처리

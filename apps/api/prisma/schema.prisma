@@ -1,0 +1,166 @@
+// 설계 근거는 docs/architecture.md §데이터 모델 참조.
+// Prisma 7: 연결 URL 은 여기가 아니라 prisma.config.ts 에 있습니다.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+}
+
+enum AccountStatus {
+  DRAFT
+  CONNECTED
+  ERROR
+}
+
+enum ConversationState {
+  WAITING_USER_MESSAGE
+  USER_REPLIED
+  FORM_SENT
+}
+
+enum EventType {
+  COMMENT_RECEIVED
+  COMMENT_SKIPPED
+  PRIVATE_REPLY_SENT
+  USER_REPLIED
+  FOLLOW_UP_SENT
+  FAILED
+}
+
+enum SkipReason {
+  SELF_COMMENT
+  NO_KEYWORD_MATCH
+  DUPLICATE
+  CAMPAIGN_DISABLED
+  ECHO
+  NO_TEXT
+  ACCOUNT_MISMATCH
+}
+
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  passwordHash String
+  status       UserStatus  @default(PENDING) // 운영자가 수동 승인
+  igAccounts   IgAccount[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+model IgAccount {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  igUserId String  @unique // Meta webhook 의 entry[].id
+  username String?
+  slug     String  @unique // webhook 경로 /webhook/:slug
+
+  // AES-256-GCM 암호문. 평문은 어디에도 저장하지 않습니다.
+  accessTokenEnc String
+  appSecretEnc   String
+  verifyToken    String
+
+  status         AccountStatus @default(DRAFT)
+  subscribedAt   DateTime? // subscribed_apps 호출 성공 시각
+  tokenExpiresAt DateTime? // 60일 만료 경고용
+  lastCheckedAt  DateTime?
+
+  // 캠페인에 문구가 없을 때의 폴백 (3단 캐스케이드 중간 단계)
+  defaultPrivateReplyText String?
+  defaultFollowUpText     String?
+
+  campaigns     Campaign[]
+  conversations Conversation[]
+  sentReplies   SentReply[]
+  events        Event[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// UI 에서는 "자동 DM" 이라고 부릅니다 (docs/why.md 원칙 1)
+model Campaign {
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+
+  mediaId      String
+  permalink    String
+  thumbnailUrl String?
+  caption      String? // 목록에서 어느 글인지 알아보게
+  label        String?
+
+  triggerKeywords  String[] @default([]) // 비어 있으면 모든 댓글
+  privateReplyText String? // null 이면 계정 기본값
+  followUpText     String // 사용자가 입력하는 "보낼 DM"
+  enabled          Boolean  @default(true)
+
+  events Event[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([igAccountId, mediaId])
+}
+
+model Conversation {
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+  igsid       String
+
+  state          ConversationState
+  lastCommentId  String?
+  lastMediaId    String? // ← 게시물별 문구가 성립하는 이유
+  lastCampaignId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([igAccountId, igsid]) // 조건부 UPDATE 의 키
+}
+
+/// Private Reply 멱등성 마커. 행의 존재 자체가 "이미 보냄" 을 뜻합니다.
+model SentReply {
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+  commentId   String
+  createdAt   DateTime  @default(now())
+
+  @@id([igAccountId, commentId])
+}
+
+/// 활동 피드 + 퍼널 분석의 원천. 기록하지 않은 과거는 복원되지 않습니다.
+model Event {
+  id          String    @id @default(cuid())
+  igAccountId String
+  igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
+
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  mediaId    String? // 비정규화 — 캠페인을 지워도 통계가 남습니다
+
+  igsid    String?
+  username String? // 본문은 저장하지 않습니다
+
+  type       EventType
+  skipReason SkipReason? // "왜 DM 이 안 갔지?" 에 답하는 열
+  errorCode  String?
+  latencyMs  Int?
+  isFollower Boolean? // Phase 3. 반응 시점 값을 박제합니다
+
+  createdAt DateTime @default(now())
+
+  @@index([igAccountId, createdAt]) // 활동 피드
+  @@index([igAccountId, mediaId, type]) // 퍼널 GROUP BY
+}
