@@ -56,6 +56,32 @@ export class InstagramApiClient {
     return this.postMessage({ recipient: { id: igsid }, message: { text } }, 'sendMessage');
   }
 
+  /**
+   * 댓글에 공개 대댓글을 답니다 (docs/meta-api.md §3).
+   *
+   * Private Reply 는 상대의 **"요청(Requests)" 탭**으로 들어가서 받은 줄 모르는 경우가
+   * 많습니다. 댓글에 공개로 한 줄 달아주면 "확인해보세요" 신호가 됩니다.
+   *
+   * 권한은 `instagram_business_manage_comments` 로 Private Reply 와 같습니다.
+   * 우리가 단 대댓글은 셀프 댓글이라 `normalize.ts` 가 `SELF_COMMENT` 으로 걸러
+   * 무한루프가 되지 않습니다.
+   */
+  async replyToComment(commentId: string, message: string): Promise<{ id: string }> {
+    const url = `${BASE_URL}/${this.apiVersion}/${commentId}/replies`;
+    const res = await this.request(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      },
+      'replyToComment',
+    );
+    if (!res.ok) throw await toApiError(res, 'replyToComment');
+    const body = (await res.json()) as { id?: string };
+    return { id: body.id ?? '' };
+  }
+
   /** 토큰 유효성 확인용. */
   async getMe(): Promise<{ userId: string; username: string }> {
     const url = `${BASE_URL}/${this.apiVersion}/me?fields=user_id,username`;
@@ -78,6 +104,22 @@ export class InstagramApiClient {
     const url = `${BASE_URL}/${this.apiVersion}/me/subscribed_apps?subscribed_fields=comments,messages`;
     const res = await this.request(url, { method: 'POST' }, 'subscribeApp');
     if (!res.ok) throw await toApiError(res, 'subscribeApp');
+  }
+
+  /**
+   * 계정에 **실제로** 걸린 구독 필드를 읽습니다.
+   *
+   * `subscribeApp()` 의 응답만 믿으면 안 됩니다. 앱 레벨에서 구독하지 않은 필드는
+   * Meta 가 조용히 버리면서도 `{"success":true}` 를 돌려줍니다 — 실제로 `comments` 가
+   * 빠진 채 "성공" 을 받고 웹훅이 한 건도 안 오는 일을 겪었습니다. 호출 뒤 이걸로
+   * 되읽어서 확인해야 합니다 (docs/meta-api.md §1-6).
+   */
+  async getSubscribedFields(): Promise<string[]> {
+    const url = `${BASE_URL}/${this.apiVersion}/me/subscribed_apps`;
+    const res = await this.request(url, { method: 'GET' }, 'getSubscribedFields');
+    if (!res.ok) throw await toApiError(res, 'getSubscribedFields');
+    const body = (await res.json()) as { data?: { subscribed_fields?: string[] }[] };
+    return body.data?.flatMap((d) => d.subscribed_fields ?? []) ?? [];
   }
 
   private async postMessage(body: unknown, context: string): Promise<SendMessageResult> {

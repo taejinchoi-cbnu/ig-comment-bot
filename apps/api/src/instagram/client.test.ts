@@ -266,3 +266,62 @@ test('getMe 응답에 user_id 가 없으면 실패로 본다 — 빈 값으로 �
   });
   await assert.rejects(() => client.getMe());
 });
+
+test('getSubscribedFields: 여러 구독 항목의 필드를 평평하게 모은다', async () => {
+  const client = new InstagramApiClient({
+    igUserId: 'ig-1',
+    accessToken: 'tok',
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ data: [{ subscribed_fields: ['comments', 'messages'] }] }), { status: 200 }),
+  });
+  assert.deepEqual(await client.getSubscribedFields(), ['comments', 'messages']);
+});
+
+// 이게 이 메서드가 존재하는 이유다. Meta 는 앱 레벨에서 구독하지 않은 필드를 조용히
+// 버리면서도 subscribeApp 에는 success:true 를 돌려준다 — 되읽기만이 진실을 말한다.
+test('getSubscribedFields: 일부만 걸린 상태를 그대로 드러낸다', async () => {
+  const client = new InstagramApiClient({
+    igUserId: 'ig-1',
+    accessToken: 'tok',
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ data: [{ subscribed_fields: ['messages'] }] }), { status: 200 }),
+  });
+  assert.deepEqual(await client.getSubscribedFields(), ['messages']);
+});
+
+test('getSubscribedFields: data 가 비면 빈 배열', async () => {
+  const client = new InstagramApiClient({
+    igUserId: 'ig-1',
+    accessToken: 'tok',
+    fetchImpl: async () => new Response(JSON.stringify({ data: [] }), { status: 200 }),
+  });
+  assert.deepEqual(await client.getSubscribedFields(), []);
+});
+
+// ── 공개 대댓글 ───────────────────────────────────────────────────
+
+test('replyToComment: /{commentId}/replies 로 message 를 POST 한다', async () => {
+  const calls: Call[] = [];
+  const client = new InstagramApiClient({
+    igUserId: IG_USER_ID,
+    accessToken: ACCESS_TOKEN,
+    fetchImpl: fakeFetch(calls, new Response(JSON.stringify({ id: '17873440459141029' }), { status: 200 })),
+  });
+
+  const result = await client.replyToComment('comment_1', 'DM 발송 완료!');
+
+  assert.equal(result.id, '17873440459141029');
+  assert.equal(calls[0]?.url, 'https://graph.instagram.com/v25.0/comment_1/replies');
+  assert.equal(calls[0]?.init.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), { message: 'DM 발송 완료!' });
+});
+
+test('replyToComment: 실패는 InstagramApiError 로 변환된다', async () => {
+  const client = new InstagramApiClient({
+    igUserId: IG_USER_ID,
+    accessToken: ACCESS_TOKEN,
+    fetchImpl: fakeFetch([], new Response(JSON.stringify({ error: { message: 'bad', code: 100 } }), { status: 400 })),
+  });
+
+  await assert.rejects(() => client.replyToComment('comment_1', '안녕'), InstagramApiError);
+});

@@ -1,6 +1,13 @@
 {
-  "_comment": "계정 온보딩 작업용 메모. 토큰/시크릿은 여기 두지 말고 즉시 API로 넘겨 암호화 저장할 것",
-  "igUserId": "17841400000000000",
-  "username": "example",
-  "note": "2026-09-01 연결, Instagram Tester 초대 수락 완료"
+  "_comment": "scripts/connect-account.ts 의 입력. ops/accounts/<slug>.json 으로 복사해 채운다. ops/ 는 gitignore 된다.",
+  "_where": "토큰·app secret 위치는 docs/meta-api.md §4.1. igUserId 는 스크립트가 자동으로 채우므로 여기 없다.",
+  "email": "you@example.com",
+  "slug": "myaccount",
+  "accessToken": "IGAA...",
+  "appSecret": "",
+  "parentAppSecret": null,
+  "defaultPrivateReplyText": null,
+  "defaultFollowUpText": null,
+  "_5_commentReply": "DM 발송 후 그 댓글에 공개로 다는 한 줄. null 이면 안 단다. DM 은 상대의 '요청' 탭으로 가서 받은 줄 모르는 경우가 많다",
+  "defaultCommentReplyText": null
 }
