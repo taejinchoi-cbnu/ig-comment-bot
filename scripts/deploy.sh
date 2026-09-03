@@ -53,3 +53,20 @@ echo "==> Outputs"
   --stack-name "$STACK_NAME" \
   --query 'Stacks[0].Outputs' \
   --output table
+
+# A green CloudFormation deploy says nothing about whether the function can boot.
+# The first deploy came up CREATE_COMPLETE and returned 502 on every request
+# (Runtime.CallbackHandlerDeprecated — a handler arity the bundler can't catch).
+# One curl closes that gap for every init-time failure, not just that one.
+echo "==> Smoke test"
+FUNCTION_URL=$("${AWS[@]}" cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiFunctionUrl`].OutputValue' \
+  --output text)
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${FUNCTION_URL%/}/health")
+if [[ "$STATUS" != "200" ]]; then
+  echo "error: GET ${FUNCTION_URL%/}/health returned $STATUS (expected 200)." >&2
+  echo "       ${AWS[*]} logs tail /aws/lambda/ig-comment-bot-${ENVIRONMENT}-Api --since 5m" >&2
+  exit 1
+fi
+echo "GET ${FUNCTION_URL%/}/health -> 200"
