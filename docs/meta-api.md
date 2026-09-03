@@ -18,7 +18,7 @@
 | 3 | 메시지 webhook 형태 | `entry[].messaging[]` 배열 (Messenger 형식) | 댓글과 같은 형태로 파싱하면 실패 |
 | 4 | **echo 필터** | 봇이 보낸 DM이 `messaging[].message.is_echo === true` (`is_self`도) 로 되돌아옴 | **무한루프.** 자기 메시지에 자기가 반응 |
 | 5 | **셀프 댓글 필터** | 내 계정이 내 글에 단 댓글도 webhook이 발사됨. `value.from.id === entry.id` 로 판별 | 자기 자신에게 DM 시도 → 실패 + 로그 오염 |
-| 6 | **계정 구독** | App Dashboard의 필드 구독만으로는 부족. 계정마다 `POST /v25.0/me/subscribed_apps?subscribed_fields=comments,messages` 필요 | **webhook이 아예 안 온다.** 가장 흔한 삽질 |
+| 6 | **계정 구독** | App Dashboard의 필드 구독만으로는 부족. 계정마다 `POST /v25.0/me/subscribed_apps?subscribed_fields=comments,messages` 필요. **그리고 이 호출은 조용히 절반만 성공한다** — 아래 §1.1 | **webhook이 아예 안 온다.** 가장 흔한 삽질 |
 | 7 | **App Secret 2종** | 앱 구성에 따라 서명 키가 Instagram app secret **또는 상위 Meta app secret**. 둘 다 시도해야 함. **계정마다 다른 Meta 앱을 쓰므로 계정별 값**이다 — `IgAccount.parentAppSecretEnc`(nullable)에 둔다. 403이 계속되면 이걸 채워본다 | 403만 반복되고 원인 파악이 오래 걸림 |
 | 8 | raw body | Function URL / API Gateway가 body를 base64로 줄 수 있음. `isBase64Encoded` 확인 후 **디코드한 원본 바이트**로 HMAC | 서명 검증 전부 실패 |
 | 9 | Private Reply 창 | 댓글당 **1회만**, 게시물/릴스는 댓글 후 **7일 이내** (Live는 방송 중에만) | 400. 재시도해도 성공 안 함 |
@@ -27,6 +27,30 @@
 | 12 | **자기 자신에게 DM 불가** | 내 계정으로 내 글에 댓글 달면 Private Reply가 자기에게 DM하는 셈이라 실패 | **테스트에 두 번째 인스타 계정이 반드시 필요** |
 | 13 | 팔로워 판별 | `is_user_follow_business` 필드가 **존재한다**. 단 **대화 성립 후에만** 조회 가능 | 원본 설계 §5.5의 "판별 API 없음"은 **틀림**. 댓글 단계에선 못 쓰는 것도 사실 |
 | 14 | 액세스 토큰 | App Dashboard → Instagram → API setup with Instagram business login → **Generate token** = **60일 장기 토큰** | OAuth 플로우를 구현할 필요가 없다 |
+
+### 1.1 `subscribed_apps` 는 조용히 절반만 성공한다 (실제로 당함)
+
+**앱 레벨에서 구독하지 않은 필드는 Meta 가 버리면서도 `{"success":true}` 를 돌려준다.**
+
+대시보드 웹훅 구성 **전에** `POST /me/subscribed_apps?subscribed_fields=comments,messages` 를
+호출했더니 200 + `success:true` 가 왔는데, 실제로 걸린 건 `messages` 하나였다:
+
+```jsonc
+// POST 는 성공을 반환했지만…
+{"success": true}
+// GET /me/subscribed_apps 의 진실
+{"data":[{"id":"…","subscribed_fields":["messages"]}]}   // ← comments 없음
+```
+
+그 상태로 게시물에 댓글이 3개 달렸지만 **webhook 은 한 건도 오지 않았다.** 로그도 에러도
+없어서 "댓글 웹훅이 원래 안 오는 건가" 로 한참 헤맸다.
+
+**대응**: 호출 뒤 `GET /me/subscribed_apps` 로 되읽어 확인한다. `client.ts` 의
+`getSubscribedFields()` 가 그것이고, `scripts/connect-account.ts` 는 `comments`·`messages`
+가 둘 다 없으면 **exit 1** 로 죽는다. 성공 메시지를 믿지 말고 되읽은 값을 믿는다.
+
+**순서**: 대시보드에서 Callback URL 등록 + 필드 구독을 **먼저** 끝내고 그다음 스크립트를
+돌린다. 반대로 하면 위 상태가 된다. 이미 그렇게 된 계정은 스크립트를 다시 돌리면 복구된다.
 
 ### 필요 권한
 ```
@@ -108,6 +132,25 @@ Content-Type: application/json
 { "recipient": { "id": "<IGSID>" },              "message": { "text": "..." } }
 ```
 
+### 공개 대댓글
+
+DM 은 상대의 **"요청(Requests)" 탭**으로 들어가서 받은 줄 모르는 경우가 많다.
+댓글에 공개로 한 줄 달아주면 "확인해보세요" 신호가 된다.
+
+```http
+POST https://graph.instagram.com/v25.0/{IG_COMMENT_ID}/replies
+Authorization: Bearer {ACCESS_TOKEN}
+Content-Type: application/json
+
+{ "message": "DM 발송 완료!" }
+```
+
+- 권한은 Private Reply 와 같은 `instagram_business_manage_comments`
+- 응답은 새 댓글 ID (`{"id": "..."}`)
+- 우리가 단 대댓글은 셀프 댓글이라 `normalize.ts` 가 `SELF_COMMENT` 으로 걸러 **무한루프가 없다**
+- **실패해도 발송 흐름을 되돌리지 않는다.** 여기 도달했다는 건 DM 이 이미 나갔다는 뜻이라,
+  던지면 SQS 재시도가 `DUPLICATE` 스킵만 쌓는다
+
 ### 재시도 분류
 
 | 재시도함 (SQS retry) | 재시도 안 함 (로그 + 종료) |
@@ -137,6 +180,35 @@ App Review를 안 가므로, **사용자가 자기 Meta 앱을 만들고** 자�
 > 6번을 빠뜨리면 5번까지 다 해도 webhook이 오지 않는다. 가장 흔한 실패 지점.
 
 App Review를 통과하면 1~5가 OAuth 버튼 하나로 접히고 **DB 레코드는 동일**하다. 나중에 붙여도 데이터 모델은 그대로.
+
+### 4.1 대시보드 어디를 누르는가
+
+공식 문서로 확인한 경로다 ([Get started](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/get-started),
+[Webhooks](https://developers.facebook.com/docs/instagram-platform/webhooks)).
+
+| 필요한 값 | 위치 |
+|---|---|
+| **액세스 토큰 (60일)** | App Dashboard → 좌측 메뉴 **Instagram → API setup with Instagram business login** → 쓰려는 계정 옆 **Generate token** |
+| **Instagram app secret** | 같은 패널. `IgAccount.appSecretEnc` 로 들어간다 |
+| 상위 Meta app secret | 앱 설정 → 기본 설정 → 앱 시크릿 코드. **평소엔 넣지 않는다.** 서명이 계속 403 일 때만 `parentAppSecret` 에 채운다 (#7) |
+| **IG User ID** | **찾을 필요 없다.** `GET /me?fields=user_id` 가 돌려주고 `scripts/connect-account.ts` 가 자동으로 채운다 |
+| Callback URL / Verify Token | 앱의 **Webhooks** 제품 → Instagram → Callback URL·Verify Token 입력 → *Verify and Save* → `comments`, `messages` 구독 |
+
+> 대시보드에서 발급한 토큰만 60일이다. Business Login 플로우로 받은 토큰은 **1시간**짜리다.
+
+**Instagram 테스터 초대는 "사람 추가"가 아니다.** 앱 역할 페이지에 두 종류가 있고 요구사항이 다르다:
+
+| | 필요한 것 | 수락하는 곳 |
+|---|---|---|
+| 앱 역할 → **사람 추가** (관리자·개발자) | 상대의 **Facebook/Meta 계정** | Meta 개발자 사이트 |
+| 앱 역할 → **Instagram 테스터** | 상대의 **인스타 아이디**뿐 | 인스타 앱 → 설정 → 앱 및 웹사이트 → 테스터 초대 |
+
+두 번째 계정은 **테스터**지 개발자가 아니다. 관리자 추가 쪽으로 가면 있지도 않은 Meta 계정을
+요구받고 막힌다. 인스타 계정 생성 자체도 이메일/전화번호면 되고 Meta 계정이 필요 없다 —
+가입 화면이 "Meta 계정으로 계속하기"를 크게 밀어줄 뿐이다.
+
+`scripts/connect-account.ts` 가 위 값 중 토큰과 app secret 두 개만 받아 나머지를 채우고
+6번(`subscribed_apps`)까지 대신 호출한다. 자세히는 [`phase-1-pipeline.md`](./phase-1-pipeline.md) §7.
 
 ---
 

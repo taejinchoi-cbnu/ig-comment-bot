@@ -186,13 +186,16 @@ model Conversation {
 }
 
 /// Private Reply 멱등성 마커. 행의 존재 자체가 "이미 보냄"을 뜻한다
+/// 키는 (계정, 사람, 게시물) — 댓글 단위가 아니다. 아래 §멱등성 참고
 model SentReply {
   igAccountId String
   igAccount   IgAccount @relation(fields: [igAccountId], references: [id], onDelete: Cascade)
-  commentId   String
+  igsid       String
+  mediaId     String
+  commentId   String                  // 키가 아니다. 어느 댓글이 발동시켰는지 추적용
   createdAt   DateTime  @default(now())
 
-  @@id([igAccountId, commentId])
+  @@id([igAccountId, igsid, mediaId])
 }
 
 /// ★ 활동 피드 + 퍼널 분석의 원천. 기록하지 않은 과거는 복원되지 않는다
@@ -244,9 +247,25 @@ model Event {
 외부 webhook은 중복 전달을 전제해야 하고, Private Reply는 댓글당 1회뿐이라 중복이 치명적이다.
 원본 설계의 별도 멱등성 아이템 + lease 방식은 **쓰지 않는다.** 조건부 SQL이 같은 보장을 더 단순하게 한다.
 
+### 키를 (계정, 사람, 게시물) 로 잡는 이유
+
+처음엔 `commentId` 로 잡았는데 **실사용에서 틀렸다.** 같은 사람이 같은 글에 댓글을 또 달면
+새 `commentId` 라 마커가 없고 DM 이 다시 나간다. Meta 의 "댓글당 1회" 제한
+([`meta-api.md`](./meta-api.md) §1-9)은 새 댓글을 새로 허용하므로 막아주지 않는다 —
+**이 키가 유일한 방어선이다.**
+
+| 키 | 같은 글에 두 번째 댓글 | 다른 글에 댓글 |
+|---|---|---|
+| `commentId` | DM 또 나감 ❌ | 나감 ✅ |
+| `igsid` | 안 나감 ✅ | **영영 안 나감** ❌ |
+| **`igsid + mediaId`** | **안 나감** ✅ | **나감** ✅ |
+
+"한 게시글 = 한 자동 DM"([`why.md`](./why.md))이라는 멘탈 모델과 정확히 일치한다.
+`commentId` 컬럼은 남겨두되 키가 아니다 — 어느 댓글이 발동시켰는지 추적용이다.
+
 ```sql
--- 댓글: 중복 webhook 차단
-INSERT INTO sent_replies (ig_account_id, comment_id) VALUES ($1, $2)
+-- 댓글: 중복 차단. 키가 (계정, 사람, 게시물) 인 것이 핵심이다
+INSERT INTO sent_replies (ig_account_id, igsid, media_id, comment_id) VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING;
 -- 영향 행 0 = 이미 보냄 → skip
 -- 발송이 retryable 에러로 실패하면 이 행을 DELETE 하고 throw (SQS 재시도가 다시 잡는다)

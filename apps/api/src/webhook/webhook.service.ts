@@ -106,6 +106,17 @@ async function recordSkipped(
   account: ResolvedAccount,
   deps: WebhookDeps,
 ): Promise<void> {
+  // ACCOUNT_MISMATCH 는 발송 직후마다 하나씩 쌓이는데 원인을 모릅니다. 이 계정은
+  // GET /me 가 user_id 와 id 두 개를 돌려주므로 둘 중 하나일 수 있으나 추측으로 고치지
+  // 않습니다. 실제로 온 값을 남겨 다음 한 번으로 특정합니다. 계정 ID 는 본문도 토큰도
+  // 아니라 로그 규칙에 걸리지 않습니다.
+  // (normalize.ts 는 순수 함수라 로그를 넣지 않습니다 — AGENTS.md 불변식 4)
+  for (const s of result.skipped) {
+    if (s.reason === 'ACCOUNT_MISMATCH') {
+      console.warn('entry.id 가 계정과 불일치', { expected: account.igUserId, got: s.igUserId });
+    }
+  }
+
   const worth = result.skipped.filter((s) => s.reason !== 'ECHO');
   if (worth.length === 0) return;
 
