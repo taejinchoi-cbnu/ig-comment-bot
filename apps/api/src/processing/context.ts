@@ -16,11 +16,14 @@ import { InstagramApiError } from '../instagram/errors.ts';
 export type HandlerPrisma = Pick<PrismaClient, 'campaign' | 'sentReply' | 'conversation' | 'event'>;
 
 /** 발송에 필요한 메서드만. 토큰 검증·구독 API 는 핸들러의 관심사가 아닙니다. */
-export type InstagramSender = Pick<InstagramApiClient, 'sendPrivateReply' | 'sendMessage'>;
+export type InstagramSender = Pick<
+  InstagramApiClient,
+  'sendPrivateReply' | 'sendMessage' | 'replyToComment'
+>;
 
 export type HandlerAccount = Pick<
   IgAccount,
-  'id' | 'igUserId' | 'defaultPrivateReplyText' | 'defaultFollowUpText'
+  'id' | 'igUserId' | 'defaultPrivateReplyText' | 'defaultFollowUpText' | 'defaultCommentReplyText'
 >;
 
 export type HandlerCampaign = Pick<

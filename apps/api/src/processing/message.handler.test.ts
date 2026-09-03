@@ -34,6 +34,7 @@ function buildAccount(overrides: Partial<HandlerAccount> = {}): HandlerAccount {
     igUserId: IG_USER_ID,
     defaultPrivateReplyText: null,
     defaultFollowUpText: '계정 기본 후속 문구',
+    defaultCommentReplyText: null,
     ...overrides,
   };
 }

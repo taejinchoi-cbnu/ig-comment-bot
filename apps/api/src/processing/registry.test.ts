@@ -22,12 +22,22 @@ function ctxRecording(seen: string[]): HandlerContext {
     },
   };
   return {
-    account: { id: 'a', igUserId: 'ig', defaultPrivateReplyText: null, defaultFollowUpText: null },
+    account: {
+      id: 'a',
+      igUserId: 'ig',
+      defaultPrivateReplyText: null,
+      defaultFollowUpText: null,
+      defaultCommentReplyText: null,
+    },
     prisma: prisma as unknown as HandlerContext['prisma'],
     instagram: {
       sendPrivateReply: async () => {
         seen.push('sendPrivateReply');
         return { recipientId: 'r', messageId: 'm' };
+      },
+      replyToComment: async () => {
+        seen.push('replyToComment');
+        return { id: 'c' };
       },
       sendMessage: async () => {
         seen.push('sendMessage');

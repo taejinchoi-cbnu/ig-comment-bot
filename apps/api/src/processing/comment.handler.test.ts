@@ -12,6 +12,7 @@ const account: HandlerAccount = {
   igUserId: '17841400000000000',
   defaultPrivateReplyText: '계정 기본 문구',
   defaultFollowUpText: '계정 기본 후속 문구',
+  defaultCommentReplyText: null, // 기본은 대댓글 없음 (opt-in)
 };
 
 const campaign: HandlerCampaign = {
@@ -38,17 +39,25 @@ function createFakeCtx(opts: {
   campaign?: HandlerCampaign | null;
   createSentReplyError?: unknown;
   sendPrivateReplyError?: unknown;
+  replyToCommentError?: unknown;
+  commentReplyText?: string | null;
   nowSequence?: number[];
 } = {}) {
   const calls: string[] = [];
   const events: EventInput[] = [];
   let deleteCalled = false;
   let upsertArgs: unknown = undefined;
+  let sentReplyCreateArgs: unknown = undefined;
+  let sentReplyDeleteArgs: unknown = undefined;
+  const commentReplies: { commentId: string; message: string }[] = [];
   let nowIdx = 0;
   const nowSequence = opts.nowSequence ?? [1000, 1500];
 
   const ctx: HandlerContext = {
-    account,
+    account:
+      opts.commentReplyText === undefined
+        ? account
+        : { ...account, defaultCommentReplyText: opts.commentReplyText },
     prisma: {
       campaign: {
         // biome-ignore lint: 테스트 전용 최소 구현
@@ -58,13 +67,15 @@ function createFakeCtx(opts: {
         },
       },
       sentReply: {
-        create: async () => {
+        create: async (args: unknown) => {
           calls.push('sentReply.create');
+          sentReplyCreateArgs = args;
           if (opts.createSentReplyError) throw opts.createSentReplyError;
           return {} as never;
         },
-        delete: async () => {
+        delete: async (args: unknown) => {
           calls.push('sentReply.delete');
+          sentReplyDeleteArgs = args;
           deleteCalled = true;
           return {} as never;
         },
@@ -94,6 +105,12 @@ function createFakeCtx(opts: {
       sendMessage: async () => {
         throw new Error('이 테스트에서는 쓰이지 않는다');
       },
+      replyToComment: async (commentId: string, message: string) => {
+        calls.push('replyToComment');
+        if (opts.replyToCommentError) throw opts.replyToCommentError;
+        commentReplies.push({ commentId, message });
+        return { id: 'reply_1' };
+      },
       // biome-ignore lint: InstagramSender 표면만 필요
     } as unknown as HandlerContext['instagram'],
     now: () => nowSequence[Math.min(nowIdx++, nowSequence.length - 1)] ?? 0,
@@ -103,8 +120,11 @@ function createFakeCtx(opts: {
     ctx,
     calls,
     events,
+    commentReplies,
     deleteCalled: () => deleteCalled,
     upsertArgs: () => upsertArgs,
+    sentReplyCreateArgs: () => sentReplyCreateArgs,
+    sentReplyDeleteArgs: () => sentReplyDeleteArgs,
   };
 }
 
@@ -247,4 +267,104 @@ test('정상 흐름에서 COMMENT_RECEIVED 와 PRIVATE_REPLY_SENT 가 모두 기
 
   assert.ok(events.some((e) => e.type === 'COMMENT_RECEIVED'));
   assert.ok(events.some((e) => e.type === 'PRIVATE_REPLY_SENT'));
+});
+
+// ── 멱등성 키: (계정, 사람, 게시물) ────────────────────────────────
+//
+// 키가 commentId 였을 때는 같은 사람이 같은 글에 댓글을 또 달면 새 ID 라 DM 이 또 나갔다.
+// Meta 의 "댓글당 1회" 제한(meta-api.md §1-9)은 새 댓글을 새로 허용하므로 막아주지 않는다.
+
+test('마커는 commentId 가 아니라 (igAccountId, igsid, mediaId) 로 선점한다', async () => {
+  const f = createFakeCtx();
+  await handleComment(baseEvent, f.ctx);
+
+  const args = f.sentReplyCreateArgs() as { data: Record<string, string> };
+  assert.deepEqual(args.data, {
+    igAccountId: 'acc_1',
+    igsid: 'igsid_1',
+    mediaId: 'media_1',
+    commentId: 'comment_1', // 추적용으로 남기지만 키는 아니다
+  });
+});
+
+test('같은 사람이 같은 글에 단 두 번째 댓글은 commentId 가 달라도 DUPLICATE 로 막힌다', async () => {
+  // 실제 DB 라면 (acc_1, igsid_1, media_1) 이 이미 있어 P2002 가 난다.
+  const f = createFakeCtx({ createSentReplyError: P2002 });
+  const secondComment: CommentEvent = { ...baseEvent, commentId: 'comment_2' };
+
+  await handleComment(secondComment, f.ctx);
+
+  assert.ok(!f.calls.includes('sendPrivateReply'), '두 번째 댓글에는 DM 을 보내지 않는다');
+  const skip = f.events.find((e) => e.type === 'COMMENT_SKIPPED');
+  assert.equal(skip?.skipReason, 'DUPLICATE');
+});
+
+test('같은 사람이 다른 글에 달면 발송한다 — 게시물별로 1회이기 때문', async () => {
+  const f = createFakeCtx({ campaign: null });
+  const otherMedia: CommentEvent = { ...baseEvent, commentId: 'comment_9', mediaId: 'media_2' };
+
+  await handleComment(otherMedia, f.ctx);
+
+  assert.ok(f.calls.includes('sendPrivateReply'));
+  const args = f.sentReplyCreateArgs() as { data: Record<string, string> };
+  assert.equal(args.data.mediaId, 'media_2');
+});
+
+test('retryable 롤백도 같은 복합키로 삭제한다', async () => {
+  const retryable = new InstagramApiError('429', { status: 429, retryable: true });
+  const f = createFakeCtx({ sendPrivateReplyError: retryable });
+
+  await assert.rejects(() => handleComment(baseEvent, f.ctx));
+
+  assert.deepEqual(f.sentReplyDeleteArgs(), {
+    where: { igAccountId_igsid_mediaId: { igAccountId: 'acc_1', igsid: 'igsid_1', mediaId: 'media_1' } },
+  });
+});
+
+// ── 공개 대댓글 ───────────────────────────────────────────────────
+
+test('계정에 대댓글 문구가 있으면 발송 후 그 댓글에 대댓글을 단다', async () => {
+  const f = createFakeCtx({ commentReplyText: 'DM 발송 완료!' });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.deepEqual(f.commentReplies, [{ commentId: 'comment_1', message: 'DM 발송 완료!' }]);
+});
+
+test('대댓글은 DM 발송과 PRIVATE_REPLY_SENT 기록이 끝난 뒤에 일어난다', async () => {
+  const f = createFakeCtx({ commentReplyText: 'DM 발송 완료!' });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(
+    f.calls.indexOf('sendPrivateReply') < f.calls.indexOf('replyToComment'),
+    '주 동작이 먼저다',
+  );
+  assert.equal(f.calls[f.calls.length - 1], 'replyToComment', '대댓글이 마지막이다');
+});
+
+test('대댓글 문구가 없으면(기본값) 호출하지 않는다 — 설정 안 한 사용자의 동작은 그대로', async () => {
+  const f = createFakeCtx(); // defaultCommentReplyText: null
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(!f.calls.includes('replyToComment'));
+});
+
+test('대댓글 문구가 공백뿐이면 호출하지 않는다', async () => {
+  const f = createFakeCtx({ commentReplyText: '   ' });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(!f.calls.includes('replyToComment'));
+});
+
+// 부가 동작이 주 동작을 되돌리면 안 된다. 던지면 SQS 가 재시도해서 DUPLICATE 만 쌓인다.
+test('대댓글이 실패해도 throw 하지 않고 PRIVATE_REPLY_SENT 는 그대로 남는다', async () => {
+  const f = createFakeCtx({
+    commentReplyText: 'DM 발송 완료!',
+    replyToCommentError: new InstagramApiError('400', { status: 400, retryable: false }),
+  });
+
+  await handleComment(baseEvent, f.ctx); // 던지지 않아야 한다
+
+  assert.ok(f.events.some((e) => e.type === 'PRIVATE_REPLY_SENT'));
+  assert.ok(!f.events.some((e) => e.type === 'FAILED'), '대댓글 실패를 FAILED 로 오염시키지 않는다');
+  assert.ok(!f.deleteCalled(), '멱등성 마커를 되돌리지 않는다');
 });

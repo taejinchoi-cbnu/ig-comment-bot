@@ -76,9 +76,18 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
   });
 
   // 멱등성 마커 선점. 반드시 발송 전에 — 발송 후에 쓰면 그 사이 재시도가 중복 발송을 만든다.
+  //
+  // 키는 (계정, 사람, 게시물) 이다. commentId 로 잡으면 같은 사람이 같은 글에 댓글을
+  // 또 달 때마다 DM 이 나간다 — Meta 의 "댓글당 1회" 제한(meta-api.md §1-9)은 새 댓글을
+  // 새로 허용하므로 막아주지 않는다. 여기가 유일한 방어선이다.
   try {
     await ctx.prisma.sentReply.create({
-      data: { igAccountId: account.id, commentId: event.commentId },
+      data: {
+        igAccountId: account.id,
+        igsid: event.igsid,
+        mediaId: event.mediaId,
+        commentId: event.commentId,
+      },
     });
   } catch (cause) {
     if (isUniqueViolation(cause)) {
@@ -113,7 +122,13 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
     if (retryable) {
       // 마커만 남고 발송은 안 된 상태를 되돌린다. 안 그러면 이 댓글은 영원히 DM 을 못 받는다.
       await ctx.prisma.sentReply.delete({
-        where: { igAccountId_commentId: { igAccountId: account.id, commentId: event.commentId } },
+        where: {
+          igAccountId_igsid_mediaId: {
+            igAccountId: account.id,
+            igsid: event.igsid,
+            mediaId: event.mediaId,
+          },
+        },
       });
       throw error; // SQS 가 재시도한다
     }
@@ -149,4 +164,32 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
     username: event.username,
     latencyMs: nowMs(ctx) - startedAt,
   });
+
+  await replyToCommentBestEffort(ctx, event.commentId, account.defaultCommentReplyText);
+}
+
+/**
+ * DM 을 보낸 뒤 그 댓글에 공개로 한 줄 답니다. Private Reply 는 상대의 "요청" 탭으로
+ * 들어가서 받은 줄 모르는 경우가 많기 때문입니다.
+ *
+ * **절대 던지지 않습니다.** 여기 도달했다는 건 DM 이 이미 나갔다는 뜻이고, 던지면 SQS 가
+ * 재시도해서 `DUPLICATE` 스킵만 쌓입니다. 부가 동작이 주 동작을 되돌릴 수 없어야 합니다.
+ *
+ * `Event` 도 남기지 않습니다 — `FAILED` 로 쓰면 "DM 발송 실패"와 섞여 Phase 3 퍼널이
+ * 오염됩니다. 전용 EventType 은 필요가 확인되면 그때 추가합니다.
+ *
+ * 문구가 없으면(기본값) 아무것도 하지 않습니다. 설정하지 않은 사용자의 동작은 그대로입니다.
+ */
+async function replyToCommentBestEffort(
+  ctx: HandlerContext,
+  commentId: string,
+  text: string | null,
+): Promise<void> {
+  if (!text?.trim()) return;
+  try {
+    await ctx.instagram.replyToComment(commentId, text);
+  } catch (cause) {
+    // 댓글 본문이 아니라 ID 만 남깁니다 (AGENTS.md §Privacy).
+    console.error('대댓글 발송 실패', { commentId, cause: String(cause) });
+  }
 }

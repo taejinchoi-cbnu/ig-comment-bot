@@ -60,14 +60,21 @@ after(async () => {
 });
 
 // ── SentReply: 댓글 멱등성 ──────────────────────────────────────────
+//
+// 키는 (igAccountId, igsid, mediaId) 다 — commentId 가 아니다. 같은 사람이 같은 글에
+// 댓글을 또 달아도 DM 은 한 번만 나가야 하고, 다른 글에 달면 나가야 한다.
 
-test('같은 (igAccountId, commentId) 로 두 번 create 하면 두 번째는 P2002 로 던진다', async () => {
-  const commentId = `${RUN_ID}_comment_1`;
+test('같은 (igAccountId, igsid, mediaId) 로 두 번 create 하면 두 번째는 P2002 로 던진다', async () => {
+  const igsid = `${RUN_ID}_igsid_dup`;
+  const mediaId = `${RUN_ID}_media_1`;
 
-  await prisma.sentReply.create({ data: { igAccountId, commentId } });
+  await prisma.sentReply.create({
+    data: { igAccountId, igsid, mediaId, commentId: `${RUN_ID}_c1` },
+  });
 
   await assert.rejects(
-    () => prisma.sentReply.create({ data: { igAccountId, commentId } }),
+    // commentId 가 달라도 막혀야 한다 — 같은 사람의 두 번째 댓글이 이 경우다
+    () => prisma.sentReply.create({ data: { igAccountId, igsid, mediaId, commentId: `${RUN_ID}_c2` } }),
     (cause: unknown) => {
       assert.equal(typeof cause, 'object');
       assert.equal((cause as { code?: unknown }).code, 'P2002');
@@ -76,19 +83,39 @@ test('같은 (igAccountId, commentId) 로 두 번 create 하면 두 번째는 P2
   );
 });
 
-test('다른 commentId 로는 정상적으로 삽입된다', async () => {
-  const row = await prisma.sentReply.create({
-    data: { igAccountId, commentId: `${RUN_ID}_comment_2` },
+test('같은 사람이라도 mediaId 가 다르면 삽입된다 (게시물별 1회)', async () => {
+  const igsid = `${RUN_ID}_igsid_multi`;
+
+  await prisma.sentReply.create({
+    data: { igAccountId, igsid, mediaId: `${RUN_ID}_media_a`, commentId: `${RUN_ID}_ca` },
   });
-  assert.equal(row.commentId, `${RUN_ID}_comment_2`);
+  const row = await prisma.sentReply.create({
+    data: { igAccountId, igsid, mediaId: `${RUN_ID}_media_b`, commentId: `${RUN_ID}_cb` },
+  });
+
+  assert.equal(row.mediaId, `${RUN_ID}_media_b`);
+});
+
+test('같은 게시물이라도 igsid 가 다르면 삽입된다 (사람별로 각각 받는다)', async () => {
+  const mediaId = `${RUN_ID}_media_shared`;
+
+  await prisma.sentReply.create({
+    data: { igAccountId, igsid: `${RUN_ID}_p1`, mediaId, commentId: `${RUN_ID}_cp1` },
+  });
+  const row = await prisma.sentReply.create({
+    data: { igAccountId, igsid: `${RUN_ID}_p2`, mediaId, commentId: `${RUN_ID}_cp2` },
+  });
+
+  assert.equal(row.igsid, `${RUN_ID}_p2`);
 });
 
 test('동시에 같은 키로 create 두 개를 실행하면 정확히 하나만 성공한다', async () => {
-  const commentId = `${RUN_ID}_comment_concurrent`;
+  const igsid = `${RUN_ID}_igsid_concurrent`;
+  const mediaId = `${RUN_ID}_media_concurrent`;
 
   const results = await Promise.allSettled([
-    prisma.sentReply.create({ data: { igAccountId, commentId } }),
-    prisma.sentReply.create({ data: { igAccountId, commentId } }),
+    prisma.sentReply.create({ data: { igAccountId, igsid, mediaId, commentId: `${RUN_ID}_cc1` } }),
+    prisma.sentReply.create({ data: { igAccountId, igsid, mediaId, commentId: `${RUN_ID}_cc2` } }),
   ]);
 
   const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -99,12 +126,16 @@ test('동시에 같은 키로 create 두 개를 실행하면 정확히 하나만
 });
 
 test('마커를 delete 한 뒤에는 같은 키로 다시 create 가 성공한다 (retryable 롤백 경로)', async () => {
+  const igsid = `${RUN_ID}_igsid_rollback`;
+  const mediaId = `${RUN_ID}_media_rollback`;
   const commentId = `${RUN_ID}_comment_rollback`;
 
-  await prisma.sentReply.create({ data: { igAccountId, commentId } });
-  await prisma.sentReply.delete({ where: { igAccountId_commentId: { igAccountId, commentId } } });
+  await prisma.sentReply.create({ data: { igAccountId, igsid, mediaId, commentId } });
+  await prisma.sentReply.delete({
+    where: { igAccountId_igsid_mediaId: { igAccountId, igsid, mediaId } },
+  });
 
-  const row = await prisma.sentReply.create({ data: { igAccountId, commentId } });
+  const row = await prisma.sentReply.create({ data: { igAccountId, igsid, mediaId, commentId } });
   assert.equal(row.commentId, commentId);
 });
 

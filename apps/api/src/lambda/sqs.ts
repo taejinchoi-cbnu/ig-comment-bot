@@ -31,6 +31,7 @@ async function buildContext(igUserId: string): Promise<HandlerContext | null> {
       igUserId: row.igUserId,
       defaultPrivateReplyText: row.defaultPrivateReplyText,
       defaultFollowUpText: row.defaultFollowUpText,
+      defaultCommentReplyText: row.defaultCommentReplyText,
     },
     prisma,
     instagram: new InstagramApiClient({ igUserId: row.igUserId, accessToken }),
