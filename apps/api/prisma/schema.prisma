@@ -44,6 +44,7 @@ enum SkipReason {
   ECHO
   NO_TEXT
   ACCOUNT_MISMATCH
+  NOT_FOLLOWER // 팔로워 게이트가 켜져 있고 비팔로워로 확인됨
 }
 
 model User {
@@ -89,6 +90,12 @@ model IgAccount {
   // null 이면 대댓글을 달지 않습니다 — 설정하지 않은 사용자의 동작은 그대로입니다.
   defaultCommentReplyText String?
 
+  // 팔로워 게이트. **null 이면 게이트가 없습니다** — 비팔로워도 양식을 받습니다(기본).
+  // 값을 넣으면 비팔로워에게 양식 대신 이 문구가 나갑니다. 판단 불가(null)일 때는
+  // 막지 않습니다 — 조회가 한 번 실패했다고 정상 사용자를 막는 쪽이 훨씬 나쁩니다.
+  // 제품 결정의 근거는 docs/why.md §팔로워 게이트 참고.
+  nonFollowerText String?
+
   campaigns     Campaign[]
   conversations Conversation[]
   sentReplies   SentReply[]
@@ -133,6 +140,13 @@ model Conversation {
   lastCommentId  String?
   lastMediaId    String? // ← 게시물별 문구가 성립하는 이유
   lastCampaignId String?
+
+  // 팔로워 여부 캐시. 이 행이 (계정, 사람) 당 하나이므로 별도 KV 저장소가 필요 없습니다.
+  // is_user_follow_business 는 대화 성립 후에만 조회되므로(meta-api.md §1-13) 댓글
+  // 단계에서는 이 캐시가 유일한 근거입니다. followerCheckedAt 이 TTL 이고, 만료는
+  // 배치가 아니라 조회 시점의 비교로 처리합니다 — 팔로우는 언제든 끊길 수 있습니다.
+  isFollower        Boolean?
+  followerCheckedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

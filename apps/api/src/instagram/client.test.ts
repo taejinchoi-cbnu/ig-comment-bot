@@ -325,3 +325,41 @@ test('replyToComment: 실패는 InstagramApiError 로 변환된다', async () =>
 
   await assert.rejects(() => client.replyToComment('comment_1', '안녕'), InstagramApiError);
 });
+
+// ── 팔로워 여부 ───────────────────────────────────────────────────
+
+test('isUserFollowBusiness: IGSID 노드에서 필드를 읽는다', async () => {
+  const calls: Call[] = [];
+  const client = new InstagramApiClient({
+    igUserId: IG_USER_ID,
+    accessToken: ACCESS_TOKEN,
+    fetchImpl: fakeFetch(calls, new Response(JSON.stringify({ is_user_follow_business: true }), { status: 200 })),
+  });
+
+  assert.equal(await client.isUserFollowBusiness('igsid_1'), true);
+  assert.equal(
+    calls[0]?.url,
+    'https://graph.instagram.com/v25.0/igsid_1?fields=is_user_follow_business',
+  );
+});
+
+// 던지면 양식 발송 흐름이 깨진다. 팔로워 여부는 발송의 전제조건이 아니다.
+test('isUserFollowBusiness: 실패하면 던지지 않고 null 을 돌려준다', async () => {
+  const client = new InstagramApiClient({
+    igUserId: IG_USER_ID,
+    accessToken: ACCESS_TOKEN,
+    fetchImpl: fakeFetch([], new Response(JSON.stringify({ error: { message: 'no' } }), { status: 400 })),
+  });
+
+  assert.equal(await client.isUserFollowBusiness('igsid_1'), null);
+});
+
+test('isUserFollowBusiness: 필드가 없으면 null (false 로 단정하지 않는다)', async () => {
+  const client = new InstagramApiClient({
+    igUserId: IG_USER_ID,
+    accessToken: ACCESS_TOKEN,
+    fetchImpl: fakeFetch([], new Response(JSON.stringify({ id: 'igsid_1' }), { status: 200 })),
+  });
+
+  assert.equal(await client.isUserFollowBusiness('igsid_1'), null);
+});

@@ -28,6 +28,7 @@ function ctxRecording(seen: string[]): HandlerContext {
       defaultPrivateReplyText: null,
       defaultFollowUpText: null,
       defaultCommentReplyText: null,
+      nonFollowerText: null,
     },
     prisma: prisma as unknown as HandlerContext['prisma'],
     instagram: {
@@ -39,6 +40,7 @@ function ctxRecording(seen: string[]): HandlerContext {
         seen.push('replyToComment');
         return { id: 'c' };
       },
+      isUserFollowBusiness: async () => null,
       sendMessage: async () => {
         seen.push('sendMessage');
         return { recipientId: 'r', messageId: 'm' };

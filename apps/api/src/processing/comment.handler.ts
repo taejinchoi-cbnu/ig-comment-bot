@@ -22,6 +22,7 @@ import type { CommentEvent } from '../webhook/normalize.ts';
 import { extractErrorCode, type HandlerContext, isRetryableError, nowMs, recordEvent } from './context.ts';
 import { resolveTemplates } from './templates.ts';
 import { shouldTrigger } from './trigger.ts';
+import { isKnownFollower } from './follower-cache.ts';
 
 /** Prisma 의 unique 제약 위반(P2002) 여부를 구조적으로 판별한다. 생성된 코드를 값으로 import 하지 않는다. */
 function isUniqueViolation(cause: unknown): boolean {
@@ -104,9 +105,24 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
     throw cause; // 예상 밖 DB 오류 — 숨기지 않는다
   }
 
+  // 이미 팔로워로 확인된 사람이면 "팔로워인지 확인할게요" 를 건너뛰고 양식을 바로 보낸다.
+  //
+  // 그 확인은 여기서 할 수 없다 — is_user_follow_business 는 대화 성립 후에만 조회되므로
+  // (docs/meta-api.md §1-13) 지난번 답장 때 message.handler 가 찍어둔 캐시가 유일한
+  // 근거다. 캐시가 없거나 만료됐거나 비팔로워면 기존 2단계 그대로 간다.
+  const existing = await ctx.prisma.conversation.findUnique({
+    where: { igAccountId_igsid: { igAccountId: account.id, igsid: event.igsid } },
+  });
+
+  // 캐시 만료 판정과 발송 시작을 같은 시점으로 본다. 둘 사이는 분기 하나뿐이라
+  // 차이가 무의미하고, now() 를 두 번 부르면 테스트에서 시퀀스만 어긋난다.
   const startedAt = nowMs(ctx);
+  const skipConfirmation = isKnownFollower(existing, startedAt);
+  const replyText = skipConfirmation ? templates.followUp : templates.privateReply;
+  const nextState = skipConfirmation ? 'FORM_SENT' : 'WAITING_USER_MESSAGE';
+
   try {
-    await ctx.instagram.sendPrivateReply(event.commentId, templates.privateReply);
+    await ctx.instagram.sendPrivateReply(event.commentId, replyText);
   } catch (error) {
     const retryable = isRetryableError(error);
 
@@ -143,13 +159,15 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
     create: {
       igAccountId: account.id,
       igsid: event.igsid,
-      state: 'WAITING_USER_MESSAGE',
+      // 양식을 이미 보냈으면 답장을 기다릴 이유가 없다. 이 상태로 두면 그 사람이
+      // 답장할 때 message.handler 의 조건부 UPDATE 가 걸러 양식이 두 번 나가지 않는다.
+      state: nextState,
       lastCommentId: event.commentId,
       lastMediaId: event.mediaId, // ← 게시물별 문구가 성립하는 이유 (docs/architecture.md §게시물별 문구)
       lastCampaignId: campaign?.id ?? null,
     },
     update: {
-      state: 'WAITING_USER_MESSAGE',
+      state: nextState,
       lastCommentId: event.commentId,
       lastMediaId: event.mediaId,
       lastCampaignId: campaign?.id ?? null,
@@ -163,7 +181,21 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
     igsid: event.igsid,
     username: event.username,
     latencyMs: nowMs(ctx) - startedAt,
+    ...(skipConfirmation ? { isFollower: true } : {}),
   });
+
+  // 확인 단계를 건너뛰었다면 이 한 번으로 양식까지 나간 것이므로 퍼널에도 그렇게 남긴다.
+  // 안 남기면 Phase 3 에서 "1차는 갔는데 양식이 안 나간 사람" 으로 잘못 집계된다.
+  if (skipConfirmation) {
+    await recordEvent(ctx, {
+      type: 'FOLLOW_UP_SENT',
+      campaignId: campaign?.id,
+      mediaId: event.mediaId,
+      igsid: event.igsid,
+      username: event.username,
+      isFollower: true,
+    });
+  }
 
   await replyToCommentBestEffort(ctx, event.commentId, account.defaultCommentReplyText);
 }

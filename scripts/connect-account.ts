@@ -33,6 +33,8 @@ type AccountFile = {
   defaultFollowUpText?: string | null;
   /** DM 발송 후 그 댓글에 공개로 다는 한 줄. null 이면 대댓글을 달지 않는다. */
   defaultCommentReplyText?: string | null;
+  /** 비팔로워에게 양식 대신 보낼 문구. null 이면 게이트 없음(기본) — docs/why.md 참고. */
+  nonFollowerText?: string | null;
 };
 
 function readAccountFile(path: string): AccountFile {
@@ -119,6 +121,7 @@ async function main(): Promise<void> {
     defaultPrivateReplyText: input.defaultPrivateReplyText ?? null,
     defaultFollowUpText: input.defaultFollowUpText ?? null,
     defaultCommentReplyText: input.defaultCommentReplyText ?? null,
+    nonFollowerText: input.nonFollowerText ?? null,
     status: 'CONNECTED' as const,
     subscribedAt: new Date(),
   };

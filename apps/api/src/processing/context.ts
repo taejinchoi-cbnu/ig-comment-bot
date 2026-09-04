@@ -18,12 +18,17 @@ export type HandlerPrisma = Pick<PrismaClient, 'campaign' | 'sentReply' | 'conve
 /** 발송에 필요한 메서드만. 토큰 검증·구독 API 는 핸들러의 관심사가 아닙니다. */
 export type InstagramSender = Pick<
   InstagramApiClient,
-  'sendPrivateReply' | 'sendMessage' | 'replyToComment'
+  'sendPrivateReply' | 'sendMessage' | 'replyToComment' | 'isUserFollowBusiness'
 >;
 
 export type HandlerAccount = Pick<
   IgAccount,
-  'id' | 'igUserId' | 'defaultPrivateReplyText' | 'defaultFollowUpText' | 'defaultCommentReplyText'
+  | 'id'
+  | 'igUserId'
+  | 'defaultPrivateReplyText'
+  | 'defaultFollowUpText'
+  | 'defaultCommentReplyText'
+  | 'nonFollowerText'
 >;
 
 export type HandlerCampaign = Pick<

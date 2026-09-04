@@ -52,8 +52,22 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
   const mediaId = conversation?.lastMediaId ?? undefined;
   const campaignId = campaign?.id ?? undefined;
 
+  // 팔로워 여부는 **대화가 성립한 지금**만 조회할 수 있다 (docs/meta-api.md §1-13).
+  // 댓글 단계에는 물어볼 방법이 없으므로 여기서 찍어 캐시해 두고, 다음 댓글 때 쓴다.
+  const isFollower = await checkFollower(ctx, igsid);
+  // 값을 못 얻었으면 캐시를 건드리지 않는다. checkedAt 만 새로 찍으면 "모름" 이
+  // TTL 동안 굳어서 그 사이 계속 확인 단계를 거치게 된다.
+  const cache = isFollower === null ? {} : { isFollower, followerCheckedAt: new Date(nowMs(ctx)) };
+
+  // 팔로워 게이트는 **옵션**이다. nonFollowerText 가 비어 있으면(기본) 아무도 막지 않는다.
+  // 판단 불가(null)일 때도 막지 않는다 — 조회가 한 번 실패했다고 정상 사용자를 막는
+  // 쪽이 훨씬 나쁘다 (docs/why.md §팔로워 게이트).
+  const gateText = ctx.account.nonFollowerText?.trim();
+  const gated = Boolean(gateText) && isFollower === false;
+
+  // 발송은 한 번, 에러 처리도 한 갈래다. 무엇을 보낼지만 위에서 정한다.
   try {
-    await ctx.instagram.sendMessage(igsid, templates.followUp);
+    await ctx.instagram.sendMessage(igsid, gated ? (gateText as string) : templates.followUp);
   } catch (cause) {
     const errorCode = extractErrorCode(cause);
 
@@ -77,9 +91,29 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
     return;
   }
 
+  if (gated) {
+    // 양식은 안 나갔다. WAITING_USER_MESSAGE 로 되돌려 두면 그 사람이 팔로우한 뒤
+    // 다시 답장할 때 이 경로를 그대로 다시 타고, 그때는 팔로워로 확인돼 양식을 받는다.
+    // FORM_SENT 로 굳히면 팔로우해도 영영 못 받는다.
+    await ctx.prisma.conversation.updateMany({
+      where: { igAccountId, igsid },
+      data: { state: 'WAITING_USER_MESSAGE', ...cache },
+    });
+    await recordEvent(ctx, {
+      type: 'COMMENT_SKIPPED',
+      skipReason: 'NOT_FOLLOWER',
+      campaignId,
+      mediaId,
+      igsid,
+      isFollower: false,
+      latencyMs: nowMs(ctx) - startedAt,
+    });
+    return;
+  }
+
   await ctx.prisma.conversation.updateMany({
     where: { igAccountId, igsid },
-    data: { state: 'FORM_SENT' },
+    data: { state: 'FORM_SENT', ...cache },
   });
 
   await recordEvent(ctx, {
@@ -88,5 +122,21 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
     mediaId,
     igsid,
     latencyMs: nowMs(ctx) - startedAt,
+    // 반응 시점의 값을 박제한다. 나중에 다시 조회하면 과거 통계가 흔들린다
+    // (docs/meta-api.md §7).
+    ...(isFollower === null ? {} : { isFollower }),
   });
+}
+
+/**
+ * 팔로워 여부 조회. **절대 던지지 않습니다** — 양식은 이미 나갔고, 부가 정보 하나 때문에
+ * SQS 재시도를 유발하면 조건부 UPDATE 에 걸려 그 사용자는 다시 받지 못합니다.
+ */
+async function checkFollower(ctx: HandlerContext, igsid: string): Promise<boolean | null> {
+  try {
+    return await ctx.instagram.isUserFollowBusiness(igsid);
+  } catch (cause) {
+    console.error('팔로워 여부 조회 실패', { igsid, cause: String(cause) });
+    return null;
+  }
 }

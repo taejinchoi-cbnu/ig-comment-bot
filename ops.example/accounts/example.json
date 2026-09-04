@@ -9,5 +9,7 @@
   "defaultPrivateReplyText": null,
   "defaultFollowUpText": null,
   "_5_commentReply": "DM 발송 후 그 댓글에 공개로 다는 한 줄. null 이면 안 단다. DM 은 상대의 '요청' 탭으로 가서 받은 줄 모르는 경우가 많다",
-  "defaultCommentReplyText": null
+  "defaultCommentReplyText": null,
+  "_6_followerGate": "비팔로워에게 양식 대신 보낼 문구. null 이면 게이트 없음(기본) = 비팔로워도 양식을 받는다. 근거는 docs/why.md §팔로워 관련 제품 결정",
+  "nonFollowerText": null
 }

@@ -78,6 +78,7 @@ export async function resolveAccountBySlug(
       defaultPrivateReplyText: row.defaultPrivateReplyText,
       defaultFollowUpText: row.defaultFollowUpText,
       defaultCommentReplyText: row.defaultCommentReplyText,
+      nonFollowerText: row.nonFollowerText,
     },
     igUserId: row.igUserId,
     verifyToken: row.verifyToken,

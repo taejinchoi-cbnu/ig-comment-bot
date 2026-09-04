@@ -242,6 +242,39 @@ model Event {
 
 ---
 
+## 팔로워 캐시 — 저장소를 새로 두지 않는다
+
+`is_user_follow_business` 는 **대화가 성립한 뒤에만** 조회된다
+([`meta-api.md`](./meta-api.md) §1-13). 댓글이 들어온 시점에는 물어볼 방법이 없다.
+그래서 답장을 받았을 때 한 번 찍어 두고, 그 값으로 다음 댓글의 흐름을 정한다.
+
+```
+MESSAGE  → is_user_follow_business 조회 → conversations.is_follower / follower_checked_at 기록
+COMMENT  → 그 두 열을 읽어 TTL 이내 + true 면 확인 단계를 건너뛰고 양식을 바로 발송
+```
+
+**Redis/DynamoDB 를 붙이지 않는다.** `Conversation` 이 이미
+`@@unique([igAccountId, igsid])` 라 사람당 한 행이다 — 그 행이 곧 key-value 이고,
+컬럼 두 개면 값과 만료 시점이 다 들어간다. 저장할 데이터는 계정당 수백 행이라
+새 저장소의 인프라·비용·장애 지점이 값을 못 한다.
+
+**TTL 은 배치가 아니라 읽는 시점의 비교다.** 만료 잡도, 스케줄러도 없다:
+
+```ts
+now - followerCheckedAt.getTime() < FOLLOWER_TTL_MS   // processing/follower-cache.ts
+```
+
+`false`(비팔로워로 확인됨)와 `null`(모름)을 구분하지 않고 **둘 다 거짓**으로 본다.
+참일 때만 단계를 건너뛰므로, 애매하면 기존 2단계로 가는 쪽이 안전하다.
+
+값을 못 얻었으면 **캐시를 아예 건드리지 않는다.** `checkedAt` 만 새로 찍으면
+"모름" 이 TTL 동안 굳어서 그 사이 계속 확인 단계를 거치게 된다.
+
+제품 결정(왜 기본으로 켜는가 / 게이트는 왜 기본으로 끄는가)은
+[`why.md`](./why.md) §팔로워 관련 제품 결정에 있다.
+
+---
+
 ## 멱등성 — SQL 두 문장이 전부
 
 외부 webhook은 중복 전달을 전제해야 하고, Private Reply는 댓글당 1회뿐이라 중복이 치명적이다.

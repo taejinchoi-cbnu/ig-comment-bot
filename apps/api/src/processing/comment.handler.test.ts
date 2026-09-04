@@ -4,6 +4,7 @@ import { handleComment } from './comment.handler.ts';
 import type { HandlerAccount, HandlerCampaign, HandlerContext, EventInput } from './context.ts';
 import { InstagramApiError } from '../instagram/errors.ts';
 import type { CommentEvent } from '../webhook/normalize.ts';
+import { FOLLOWER_TTL_MS } from './follower-cache.ts';
 
 // ── 픽스처 ────────────────────────────────────────────────────────
 
@@ -13,6 +14,7 @@ const account: HandlerAccount = {
   defaultPrivateReplyText: '계정 기본 문구',
   defaultFollowUpText: '계정 기본 후속 문구',
   defaultCommentReplyText: null, // 기본은 대댓글 없음 (opt-in)
+  nonFollowerText: null, // 기본은 게이트 없음 (opt-in)
 };
 
 const campaign: HandlerCampaign = {
@@ -37,6 +39,8 @@ const baseEvent: CommentEvent = {
 /** 호출 순서를 기록하는 가짜 HandlerContext. 각 훅으로 동작을 커스터마이즈한다. */
 function createFakeCtx(opts: {
   campaign?: HandlerCampaign | null;
+  /** 기존 대화 = 팔로워 캐시. null 이면 처음 보는 사람. */
+  conversation?: { isFollower: boolean | null; followerCheckedAt: Date | null } | null;
   createSentReplyError?: unknown;
   sendPrivateReplyError?: unknown;
   replyToCommentError?: unknown;
@@ -50,6 +54,7 @@ function createFakeCtx(opts: {
   let sentReplyCreateArgs: unknown = undefined;
   let sentReplyDeleteArgs: unknown = undefined;
   const commentReplies: { commentId: string; message: string }[] = [];
+  const privateReplies: string[] = [];
   let nowIdx = 0;
   const nowSequence = opts.nowSequence ?? [1000, 1500];
 
@@ -81,6 +86,10 @@ function createFakeCtx(opts: {
         },
       },
       conversation: {
+        findUnique: async () => {
+          calls.push('conversation.findUnique');
+          return opts.conversation ?? null;
+        },
         upsert: async (args: unknown) => {
           calls.push('conversation.upsert');
           upsertArgs = args;
@@ -97,11 +106,13 @@ function createFakeCtx(opts: {
       // biome-ignore lint: HandlerPrisma 표면만 필요
     } as unknown as HandlerContext['prisma'],
     instagram: {
-      sendPrivateReply: async () => {
+      sendPrivateReply: async (_commentId: string, text: string) => {
         calls.push('sendPrivateReply');
+        privateReplies.push(text);
         if (opts.sendPrivateReplyError) throw opts.sendPrivateReplyError;
         return { recipientId: 'igsid_1', messageId: 'mid_1' };
       },
+      isUserFollowBusiness: async () => null,
       sendMessage: async () => {
         throw new Error('이 테스트에서는 쓰이지 않는다');
       },
@@ -121,6 +132,7 @@ function createFakeCtx(opts: {
     calls,
     events,
     commentReplies,
+    privateReplies,
     deleteCalled: () => deleteCalled,
     upsertArgs: () => upsertArgs,
     sentReplyCreateArgs: () => sentReplyCreateArgs,
@@ -367,4 +379,61 @@ test('대댓글이 실패해도 throw 하지 않고 PRIVATE_REPLY_SENT 는 그�
   assert.ok(f.events.some((e) => e.type === 'PRIVATE_REPLY_SENT'));
   assert.ok(!f.events.some((e) => e.type === 'FAILED'), '대댓글 실패를 FAILED 로 오염시키지 않는다');
   assert.ok(!f.deleteCalled(), '멱등성 마커를 되돌리지 않는다');
+});
+
+// ── 팔로워 캐시로 확인 단계 건너뛰기 ─────────────────────────────
+//
+// is_user_follow_business 는 대화 성립 후에만 조회되므로(meta-api.md §1-13) 댓글
+// 단계에서 새로 물어볼 수 없다. 지난 답장 때 저장해둔 캐시가 유일한 근거다.
+
+const freshFollower = { isFollower: true, followerCheckedAt: new Date(1000 - 60_000) };
+
+test('팔로워로 확인된 사람에게는 확인 문구 대신 양식을 바로 보낸다', async () => {
+  const f = createFakeCtx({ conversation: freshFollower });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.deepEqual(f.privateReplies, ['캠페인 후속 문구'], '1차 발송이 곧 양식이다');
+});
+
+test('건너뛴 경우 대화는 곧바로 FORM_SENT 가 된다', async () => {
+  const f = createFakeCtx({ conversation: freshFollower });
+  await handleComment(baseEvent, f.ctx);
+
+  const args = f.upsertArgs() as { create: { state: string }; update: { state: string } };
+  assert.equal(args.create.state, 'FORM_SENT');
+  assert.equal(args.update.state, 'FORM_SENT');
+});
+
+// 안 남기면 Phase 3 퍼널에서 "1차는 갔는데 양식이 안 나간 사람" 으로 잘못 집계된다.
+test('건너뛴 경우 PRIVATE_REPLY_SENT 와 FOLLOW_UP_SENT 를 모두 기록한다', async () => {
+  const f = createFakeCtx({ conversation: freshFollower });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'PRIVATE_REPLY_SENT' && e.isFollower === true));
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT' && e.isFollower === true));
+});
+
+test('캐시가 만료됐으면 기존 2단계로 간다', async () => {
+  const stale = { isFollower: true, followerCheckedAt: new Date(1000 - FOLLOWER_TTL_MS - 1) };
+  const f = createFakeCtx({ conversation: stale });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.deepEqual(f.privateReplies, ['캠페인 문구']);
+  const args = f.upsertArgs() as { create: { state: string } };
+  assert.equal(args.create.state, 'WAITING_USER_MESSAGE');
+});
+
+test('비팔로워로 확인된 사람도 기존 2단계로 간다', async () => {
+  const f = createFakeCtx({ conversation: { isFollower: false, followerCheckedAt: new Date(1000) } });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.deepEqual(f.privateReplies, ['캠페인 문구']);
+});
+
+test('처음 보는 사람은 기존 2단계로 간다', async () => {
+  const f = createFakeCtx({ conversation: null });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.deepEqual(f.privateReplies, ['캠페인 문구']);
+  assert.ok(!f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
 });

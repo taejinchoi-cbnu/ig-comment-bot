@@ -35,6 +35,7 @@ function buildAccount(overrides: Partial<HandlerAccount> = {}): HandlerAccount {
     defaultPrivateReplyText: null,
     defaultFollowUpText: '계정 기본 후속 문구',
     defaultCommentReplyText: null,
+    nonFollowerText: null,
     ...overrides,
   };
 }
@@ -59,6 +60,9 @@ function buildCtx(opts: {
   campaignOwners?: Record<string, string>;
   account?: HandlerAccount;
   sendMessageImpl?: (igsid: string, text: string) => Promise<{ recipientId: string; messageId: string }>;
+  /** isUserFollowBusiness 가 돌려줄 값. 기본 null(모름). */
+  isFollower?: boolean | null;
+  followerCheckError?: unknown;
   now?: () => number;
 }) {
   const calls: string[] = [];
@@ -70,6 +74,8 @@ function buildCtx(opts: {
       : opts.conversation;
 
   const campaigns = opts.campaigns ?? {};
+  let formSentData: Record<string, unknown> | undefined;
+  let rollbackData: Record<string, unknown> | undefined;
 
   const prisma = {
     conversation: {
@@ -82,12 +88,14 @@ function buildCtx(opts: {
         }
         if (data.state === 'WAITING_USER_MESSAGE') {
           calls.push('rollback');
+          rollbackData = data as Record<string, unknown>;
           if (!conversation) return { count: 0 };
           conversation = { ...conversation, state: 'WAITING_USER_MESSAGE' };
           return { count: 1 };
         }
-        // FORM_SENT
+        // FORM_SENT — 팔로워 캐시도 이때 같이 쓴다
         calls.push('formSent');
+        formSentData = data as Record<string, unknown>;
         if (!conversation) return { count: 0 };
         conversation = { ...conversation, state: 'FORM_SENT' };
         return { count: 1 };
@@ -128,6 +136,14 @@ function buildCtx(opts: {
       calls.push('sendMessage');
       return sendMessageImpl(igsid, text);
     },
+    replyToComment: async () => {
+      throw new Error('이 핸들러는 replyToComment 를 쓰지 않는다');
+    },
+    isUserFollowBusiness: async () => {
+      calls.push('isUserFollowBusiness');
+      if (opts.followerCheckError) throw opts.followerCheckError;
+      return opts.isFollower ?? null;
+    },
   } as unknown as InstagramSender;
 
   const ctx: HandlerContext = {
@@ -137,7 +153,7 @@ function buildCtx(opts: {
     ...(opts.now ? { now: opts.now } : {}),
   };
 
-  return { ctx, calls, events, getConversation: () => conversation };
+  return { ctx, calls, events, getConversation: () => conversation, formSentData: () => formSentData, rollbackData: () => rollbackData };
 }
 
 // ── 정상 흐름 ──────────────────────────────────────────────────────
@@ -363,4 +379,129 @@ test('테넌트 격리: lastCampaignId 가 다른 계정 소유 캠페인을 가
   await handleMessage(buildEvent(), ctx);
   assert.ok(calls.includes('findCampaign'));
   assert.ok(calls.includes('sendMessage'), '검증은 sendMessageImpl 안에서 이뤄진다');
+});
+
+// ── 팔로워 캐시 채우기 ────────────────────────────────────────────
+//
+// is_user_follow_business 는 대화 성립 후에만 조회된다(meta-api.md §1-13).
+// 답장을 받은 지금이 유일한 기회라 여기서 찍어 Conversation 에 저장한다.
+
+test('답장을 받으면 팔로워 여부를 조회해 대화에 캐시한다', async () => {
+  const f = buildCtx({ isFollower: true, now: () => 5000 });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.calls.includes('isUserFollowBusiness'));
+  const data = f.formSentData() as Record<string, unknown>;
+  assert.equal(data.state, 'FORM_SENT');
+  assert.equal(data.isFollower, true);
+  assert.deepEqual(data.followerCheckedAt, new Date(5000));
+});
+
+test('비팔로워도 그대로 캐시한다 — 매번 다시 묻지 않기 위해', async () => {
+  const f = buildCtx({ isFollower: false, now: () => 5000 });
+  await handleMessage(buildEvent(), f.ctx);
+
+  const data = f.formSentData() as Record<string, unknown>;
+  assert.equal(data.isFollower, false);
+});
+
+// 값을 못 얻었는데 checkedAt 만 새로 찍으면 "모름" 이 TTL 동안 굳는다.
+test('값을 못 얻으면 캐시 필드를 건드리지 않는다', async () => {
+  const f = buildCtx({ isFollower: null });
+  await handleMessage(buildEvent(), f.ctx);
+
+  const data = f.formSentData() as Record<string, unknown>;
+  assert.equal(data.state, 'FORM_SENT');
+  assert.ok(!('isFollower' in data));
+  assert.ok(!('followerCheckedAt' in data));
+});
+
+// 양식은 이미 나갔다. 부가 정보 하나 때문에 SQS 재시도를 유발하면 조건부 UPDATE 에
+// 걸려 그 사용자는 양식을 다시 받지 못한다.
+test('팔로워 조회가 실패해도 throw 하지 않고 FOLLOW_UP_SENT 는 남는다', async () => {
+  const f = buildCtx({ followerCheckError: new Error('boom') });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
+  assert.ok(f.calls.includes('formSent'));
+});
+
+test('FOLLOW_UP_SENT 에 조회 시점의 팔로워 여부를 박제한다', async () => {
+  const f = buildCtx({ isFollower: true });
+  await handleMessage(buildEvent(), f.ctx);
+
+  const sent = f.events.find((e) => e.type === 'FOLLOW_UP_SENT');
+  assert.equal(sent?.isFollower, true);
+});
+
+// ── 팔로워 게이트 (옵션) ──────────────────────────────────────────
+//
+// 기본은 꺼져 있다. nonFollowerText 를 넣은 계정에서만 동작한다.
+
+const gateAccount = (text: string | null) => buildAccount({ nonFollowerText: text });
+
+test('게이트가 꺼져 있으면(기본) 비팔로워도 양식을 받는다', async () => {
+  const f = buildCtx({ isFollower: false });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
+});
+
+test('게이트가 켜져 있고 비팔로워면 양식 대신 게이트 문구가 나간다', async () => {
+  const sent: string[] = [];
+  const f = buildCtx({
+    account: gateAccount('먼저 팔로우해주세요!'),
+    isFollower: false,
+    sendMessageImpl: async (r, text) => {
+      sent.push(text);
+      return { recipientId: r, messageId: 'm' };
+    },
+  });
+
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.deepEqual(sent, ['먼저 팔로우해주세요!']);
+  assert.ok(!f.events.some((e) => e.type === 'FOLLOW_UP_SENT'), '양식은 안 나갔다');
+  const skip = f.events.find((e) => e.type === 'COMMENT_SKIPPED');
+  assert.equal(skip?.skipReason, 'NOT_FOLLOWER');
+});
+
+// FORM_SENT 로 굳히면 팔로우한 뒤에도 영영 양식을 못 받는다.
+test('게이트에 막히면 대화를 WAITING_USER_MESSAGE 로 되돌려 재시도 여지를 남긴다', async () => {
+  const f = buildCtx({ account: gateAccount('먼저 팔로우해주세요!'), isFollower: false });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.equal(f.getConversation()?.state, 'WAITING_USER_MESSAGE');
+});
+
+test('게이트가 켜져 있어도 팔로워면 양식을 받는다', async () => {
+  const f = buildCtx({ account: gateAccount('먼저 팔로우해주세요!'), isFollower: true });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
+});
+
+// 조회가 한 번 실패했다고 정상 사용자를 막는 쪽이 훨씬 나쁘다.
+test('팔로워 여부를 모르면 게이트가 켜져 있어도 막지 않는다', async () => {
+  const f = buildCtx({ account: gateAccount('먼저 팔로우해주세요!'), isFollower: null });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
+});
+
+test('게이트 문구가 공백뿐이면 게이트가 없는 것으로 본다', async () => {
+  const f = buildCtx({ account: gateAccount('   '), isFollower: false });
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
+});
+
+test('게이트에 막혀도 팔로워 캐시는 저장된다 — 매번 다시 묻지 않기 위해', async () => {
+  const f = buildCtx({ account: gateAccount('먼저 팔로우해주세요!'), isFollower: false, now: () => 7000 });
+  await handleMessage(buildEvent(), f.ctx);
+
+  const data = f.rollbackData() as Record<string, unknown>;
+  assert.equal(data.state, 'WAITING_USER_MESSAGE');
+  assert.equal(data.isFollower, false);
+  assert.deepEqual(data.followerCheckedAt, new Date(7000));
 });

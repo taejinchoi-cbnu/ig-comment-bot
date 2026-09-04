@@ -96,6 +96,23 @@ export class InstagramApiClient {
   }
 
   /**
+   * 이 사람이 우리 계정을 팔로우하는지 (docs/meta-api.md §1-13, §7).
+   *
+   * **대화가 성립한 뒤에만 조회됩니다** — 댓글 단계에서는 쓸 수 없습니다. 그래서 답장을
+   * 받은 시점에 한 번 찍어 Conversation 에 캐시해 두고, 다음 댓글 때는 그 값을 씁니다.
+   *
+   * 값을 못 얻으면(권한·창 만료·필드 없음) `null` 을 돌려줍니다. 여기서 던지면 양식 발송
+   * 흐름이 깨지는데, 팔로워 여부는 발송의 전제조건이 아니라 부가 정보입니다.
+   */
+  async isUserFollowBusiness(igsid: string): Promise<boolean | null> {
+    const url = `${BASE_URL}/${this.apiVersion}/${igsid}?fields=is_user_follow_business`;
+    const res = await this.request(url, { method: 'GET' }, 'isUserFollowBusiness');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { is_user_follow_business?: unknown };
+    return typeof body.is_user_follow_business === 'boolean' ? body.is_user_follow_business : null;
+  }
+
+  /**
    * 계정 연결 절차의 필수 단계. App Dashboard 에서 필드를 구독하는 것만으로는 부족하고,
    * 계정마다 이 호출이 있어야 합니다. 빠뜨리면 webhook 이 한 건도 오지 않습니다 —
    * 가장 흔한 실패 지점입니다 (docs/meta-api.md §1-6, §4).

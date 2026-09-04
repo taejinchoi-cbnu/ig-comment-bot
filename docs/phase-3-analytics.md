@@ -71,7 +71,8 @@ SELECT media_id, type, count(*) AS n, count(DISTINCT igsid) AS people
 
 귀속은 못 해도 **게시글 단위 실측은 된다.** 상용 도구가 보여주지 않는 숫자다.
 
-- [ ] MESSAGE 핸들러에서 답장 직후 `GET /{IGSID}?fields=is_user_follow_business` 호출
+- [x] MESSAGE 핸들러에서 답장 직후 `GET /{IGSID}?fields=is_user_follow_business` 호출
+      — 2026-09-04 완료. 팔로워 게이트를 앞당기면서 같이 들어갔고 `Event.isFollower` 에 박제된다
 - [ ] **결과를 `Event` 행에 그때 기록한다.** 나중에 다시 조회하면 값이 변해 과거 통계가 흔들린다
 - [ ] 조회 실패는 무시하고 진행 — 이 값 때문에 DM 발송이 막히면 안 된다
 - [ ] 게시글 줄에 `팔로워 28 / 비팔로워 13` 표시
