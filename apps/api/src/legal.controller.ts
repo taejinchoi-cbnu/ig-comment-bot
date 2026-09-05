@@ -13,7 +13,7 @@ import { Controller, Get, Header } from '@nestjs/common';
 
 // 공개 페이지에 실리는 값입니다. 바꾸려면 여기만 고치고 배포하면 됩니다.
 const CONTACT_EMAIL = 'ctj0999@gmail.com';
-const UPDATED_AT = '2026-09-03';
+const UPDATED_AT = '2026-09-05';
 
 const PRIVACY_HTML = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
@@ -37,6 +37,7 @@ const PRIVACY_HTML = `<!doctype html>
 <tr><td>Instagram 사용자명</td><td>운영자 화면의 활동 내역 표시 (공개 정보)</td></tr>
 <tr><td>댓글·메시지 이벤트의 메타데이터<br>(발생 시각, 게시물 ID, 처리 결과)</td><td>발송 여부 통계, "왜 DM 이 안 갔는지" 확인</td></tr>
 <tr><td>연동 계정의 액세스 토큰 및 앱 시크릿</td><td>Instagram API 호출. <strong>AES-256-GCM 으로 암호화</strong>해 저장</td></tr>
+<tr><td>서비스에 계정을 연동한 운영자의 이메일 주소</td><td>운영자 식별. <strong>댓글·DM을 남긴 이용자에게서는 수집하지 않습니다</strong></td></tr>
 </table>
 
 <h2>2. 저장하지 않는 정보</h2>
@@ -44,7 +45,7 @@ const PRIVACY_HTML = `<!doctype html>
 <li><strong>댓글 본문과 다이렉트 메시지 본문을 저장하지 않습니다.</strong> 키워드 일치 여부만 메모리에서 판단하고 본문은 버립니다.</li>
 <li>로그에도 본문을 기록하지 않습니다.</li>
 <li>액세스 토큰·시크릿을 평문으로 저장하거나 로그에 남기지 않습니다.</li>
-<li>이메일, 전화번호, 결제 정보, 위치 정보를 수집하지 않습니다.</li>
+<li>댓글·DM을 남긴 이용자의 이메일, 전화번호, 결제 정보, 위치 정보를 수집하지 않습니다.</li>
 </ul>
 
 <h2>3. 제3자 제공</h2>

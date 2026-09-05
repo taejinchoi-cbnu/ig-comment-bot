@@ -244,15 +244,22 @@ test('retryable 실패면 마커를 delete 로 되돌리고 throw 한다', async
 
 // ── 발송 실패: non-retryable ──────────────────────────────────────
 
-test('non-retryable 실패면 마커를 남겨두고 throw 하지 않는다', async () => {
+// 마커의 뜻은 "이미 보냈다" 하나뿐이다. 발송이 실패했으면 안 보낸 것이므로 되돌린다.
+// 키가 (계정, 사람, 게시물)이 되면서 남겨두는 비용이 완전히 달라졌다 — commentId 키에서는
+// 그 댓글 하나가 손해였지만, 지금은 **그 사람이 그 게시물에서 영영 못 받는다.**
+// 토큰이 잠깐 403(비재시도로 분류)이었다가 복구된 경우까지 영구 소각된다.
+test('non-retryable 실패면 throw 하지 않지만 마커는 되돌린다', async () => {
   const permanentError = new InstagramApiError('만료된 창', { status: 400, retryable: false });
-  const { ctx, calls, events, deleteCalled } = createFakeCtx({ sendPrivateReplyError: permanentError });
+  const f = createFakeCtx({ sendPrivateReplyError: permanentError });
 
-  await assert.doesNotReject(() => handleComment(baseEvent, ctx));
+  await assert.doesNotReject(() => handleComment(baseEvent, f.ctx));
 
-  assert.ok(!deleteCalled(), 'sentReply.delete 는 호출되면 안 된다 (마커를 남겨둔다)');
-  assert.ok(!calls.includes('conversation.upsert'));
-  const failedEvent = events.find((e) => e.type === 'FAILED');
+  assert.ok(f.deleteCalled(), '마커를 지워야 나중에 같은 사람이 같은 글에서 다시 받을 수 있다');
+  assert.deepEqual(f.sentReplyDeleteArgs(), {
+    where: { igAccountId_igsid_mediaId: { igAccountId: 'acc_1', igsid: 'igsid_1', mediaId: 'media_1' } },
+  });
+  assert.ok(!f.calls.includes('conversation.upsert'));
+  const failedEvent = f.events.find((e) => e.type === 'FAILED');
   assert.ok(failedEvent, 'FAILED 가 기록돼야 한다');
   assert.equal(failedEvent?.errorCode, '400');
 });
@@ -437,3 +444,4 @@ test('처음 보는 사람은 기존 2단계로 간다', async () => {
   assert.deepEqual(f.privateReplies, ['캠페인 문구']);
   assert.ok(!f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
 });
+

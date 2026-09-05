@@ -25,6 +25,22 @@ export type FollowerCache = {
 };
 
 /**
+ * "이 값을 다시 물어볼 필요가 없는가." **값이 무엇인지와 무관합니다.**
+ *
+ * 팔로워임(`isKnownFollower`)과 신선함은 다른 질문입니다. 비팔로워로 확인된 사람도
+ * 확인은 신선한 것이고, 이 둘을 뭉치면 비팔로워에게 답장마다 조회를 날리게 됩니다.
+ */
+export function isFollowerCacheFresh(
+  cache: FollowerCache | null | undefined,
+  now: number,
+  ttlMs: number = FOLLOWER_TTL_MS,
+): boolean {
+  const checkedAt = cache?.followerCheckedAt;
+  if (!checkedAt) return false; // 확인한 적이 없거나 시점이 없으면 만료 판정이 불가능하다
+  return now - checkedAt.getTime() < ttlMs;
+}
+
+/**
  * "이 사람은 팔로워임이 확인됐고 그 확인이 아직 유효한가."
  *
  * `false`(비팔로워로 확인됨)와 `null`(모름)을 **구분하지 않고 둘 다 거짓**으로 봅니다 —
@@ -35,8 +51,5 @@ export function isKnownFollower(
   now: number,
   ttlMs: number = FOLLOWER_TTL_MS,
 ): boolean {
-  if (cache?.isFollower !== true) return false;
-  const checkedAt = cache.followerCheckedAt;
-  if (!checkedAt) return false; // 값만 있고 시점이 없으면 만료 판정이 불가능하다
-  return now - checkedAt.getTime() < ttlMs;
+  return cache?.isFollower === true && isFollowerCacheFresh(cache, now, ttlMs);
 }

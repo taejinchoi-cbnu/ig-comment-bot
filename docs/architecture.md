@@ -301,7 +301,12 @@ now - followerCheckedAt.getTime() < FOLLOWER_TTL_MS   // processing/follower-cac
 INSERT INTO sent_replies (ig_account_id, igsid, media_id, comment_id) VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING;
 -- 영향 행 0 = 이미 보냄 → skip
--- 발송이 retryable 에러로 실패하면 이 행을 DELETE 하고 throw (SQS 재시도가 다시 잡는다)
+-- 발송이 실패하면 성공 여부와 무관하게 이 행을 DELETE 한다.
+--   · retryable      → DELETE 후 throw (SQS 재시도가 다시 잡는다)
+--   · non-retryable  → DELETE 후 return (throw 하면 DLQ 노이즈만 생긴다)
+-- 마커의 뜻은 "이미 보냄" 하나뿐이라, 안 보냈으면 남겨둘 이유가 없다. 키가
+-- (계정, 사람, 게시물)이라 남겨두면 그 사람이 그 게시물에서 영영 못 받는다 — 토큰이
+-- 잠깐 403(비재시도로 분류)이었다가 복구된 경우까지 영구 소각된다.
 
 -- 메시지: 중복 차단 + 캠페인 조회를 한 문장으로
 UPDATE conversations SET state = 'USER_REPLIED'

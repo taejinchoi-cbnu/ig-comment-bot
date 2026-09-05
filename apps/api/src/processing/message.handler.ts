@@ -14,6 +14,7 @@
 import type { MessageEvent } from '../webhook/normalize.ts';
 import { extractErrorCode, type HandlerContext, isRetryableError, nowMs, recordEvent } from './context.ts';
 import { resolveTemplates } from './templates.ts';
+import { isFollowerCacheFresh } from './follower-cache.ts';
 
 export async function handleMessage(event: MessageEvent, ctx: HandlerContext): Promise<void> {
   const startedAt = nowMs(ctx);
@@ -28,6 +29,12 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
     data: { state: 'USER_REPLIED' },
   });
   if (claimed.count === 0) {
+    // 이미 양식을 보낸 사람의 답장이거나 중복 웹훅이다. 어느 쪽이든 양식을 다시 보내지 않는다.
+    //
+    // 다만 **캐시는 여기서 갱신한다.** 확인 단계를 건너뛴 사람은 대화가 FORM_SENT 로
+    // 시작하므로 위 조건부 UPDATE 에 항상 걸리고, 아래의 checkFollower 에 영영 도달하지
+    // 못한다 — 최적화 대상인 단골에게서만 캐시가 안 갱신되는 자기모순이 된다.
+    await refreshFollowerCacheIfStale(ctx, igAccountId, igsid);
     await recordEvent(ctx, { type: 'COMMENT_SKIPPED', skipReason: 'DUPLICATE', igsid });
     return;
   }
@@ -125,6 +132,33 @@ export async function handleMessage(event: MessageEvent, ctx: HandlerContext): P
     // 반응 시점의 값을 박제한다. 나중에 다시 조회하면 과거 통계가 흔들린다
     // (docs/meta-api.md §7).
     ...(isFollower === null ? {} : { isFollower }),
+  });
+}
+
+/**
+ * 양식을 보내지 않는 경로에서 캐시만 되살립니다.
+ *
+ * **만료됐거나 없을 때만 조회합니다.** 신선하면 API 를 부르지 않습니다 — 답장 하나마다
+ * 한 번씩 쓰면 캐시를 둔 의미가 없어집니다. 여기서 `isKnownFollower` 가 아니라
+ * `isFollowerCacheFresh` 를 쓰는 이유이기도 합니다. 비팔로워로 확인된 사람도 확인 자체는
+ * 신선하므로, 뭉쳐서 판단하면 그 사람의 답장마다 조회가 나갑니다.
+ */
+async function refreshFollowerCacheIfStale(
+  ctx: HandlerContext,
+  igAccountId: string,
+  igsid: string,
+): Promise<void> {
+  const existing = await ctx.prisma.conversation.findUnique({
+    where: { igAccountId_igsid: { igAccountId, igsid } },
+  });
+  if (isFollowerCacheFresh(existing, nowMs(ctx))) return;
+
+  const isFollower = await checkFollower(ctx, igsid);
+  if (isFollower === null) return; // 못 얻었으면 건드리지 않는다 ("모름" 이 굳는 것을 막는다)
+
+  await ctx.prisma.conversation.updateMany({
+    where: { igAccountId, igsid },
+    data: { isFollower, followerCheckedAt: new Date(nowMs(ctx)) },
   });
 }
 

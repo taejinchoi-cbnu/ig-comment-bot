@@ -135,21 +135,26 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
       errorCode: extractErrorCode(error),
     });
 
-    if (retryable) {
-      // 마커만 남고 발송은 안 된 상태를 되돌린다. 안 그러면 이 댓글은 영원히 DM 을 못 받는다.
-      await ctx.prisma.sentReply.delete({
-        where: {
-          igAccountId_igsid_mediaId: {
-            igAccountId: account.id,
-            igsid: event.igsid,
-            mediaId: event.mediaId,
-          },
+    // 성공 여부와 무관하게 마커를 되돌린다. **마커의 뜻은 "이미 보냈다" 하나뿐이다** —
+    // 발송이 실패했으면 안 보낸 것이므로 남겨둘 이유가 없다.
+    //
+    // 키가 commentId 였을 때는 non-retryable 에서 마커를 남겨도 손해가 그 댓글 하나였다.
+    // 지금 키는 (계정, 사람, 게시물)이라 남겨두면 **그 사람은 그 게시물에서 영영 DM 을
+    // 못 받는다.** 토큰이 잠깐 403(비재시도로 분류됨)이었다가 복구된 경우까지 영구 소각된다.
+    // 중복 웹훅이 오면 실패한 호출을 한 번 더 쓰지만, 그쪽이 훨씬 싸다.
+    await ctx.prisma.sentReply.delete({
+      where: {
+        igAccountId_igsid_mediaId: {
+          igAccountId: account.id,
+          igsid: event.igsid,
+          mediaId: event.mediaId,
         },
-      });
-      throw error; // SQS 가 재시도한다
-    }
+      },
+    });
 
-    // non-retryable: 재시도해도 절대 성공하지 않으므로 마커는 남겨두고 조용히 끝낸다.
+    if (retryable) throw error; // SQS 가 재시도한다
+
+    // non-retryable: 재시도해도 성공하지 않으므로 throw 하지 않는다.
     // throw 하면 5회 재시도 후 DLQ 로 가서 노이즈만 만든다.
     return;
   }

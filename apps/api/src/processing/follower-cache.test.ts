@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FOLLOWER_TTL_MS, isKnownFollower } from './follower-cache.ts';
+import { FOLLOWER_TTL_MS, isFollowerCacheFresh, isKnownFollower } from './follower-cache.ts';
 
 const NOW = 1_800_000_000_000;
 const ago = (ms: number) => new Date(NOW - ms);
@@ -47,4 +47,26 @@ test('TTL 은 주입할 수 있다', () => {
   const cache = { isFollower: true, followerCheckedAt: ago(5000) };
   assert.equal(isKnownFollower(cache, NOW, 10_000), true);
   assert.equal(isKnownFollower(cache, NOW, 1_000), false);
+});
+
+// ── 신선도 vs 팔로워임 ────────────────────────────────────────────
+//
+// 둘을 뭉치면 비팔로워로 확인된 사람에게 답장마다 조회가 나간다 — 확인은 신선한데
+// isKnownFollower 가 거짓이라 "다시 물어봐야 한다" 로 읽히기 때문이다.
+
+test('비팔로워로 확인된 캐시도 신선하다 — 다시 물어볼 필요가 없다', () => {
+  const cache = { isFollower: false, followerCheckedAt: ago(1000) };
+  assert.equal(isFollowerCacheFresh(cache, NOW), true);
+  assert.equal(isKnownFollower(cache, NOW), false);
+});
+
+test('만료된 캐시는 값과 무관하게 신선하지 않다', () => {
+  const old = ago(FOLLOWER_TTL_MS + 1);
+  assert.equal(isFollowerCacheFresh({ isFollower: true, followerCheckedAt: old }, NOW), false);
+  assert.equal(isFollowerCacheFresh({ isFollower: false, followerCheckedAt: old }, NOW), false);
+});
+
+test('확인한 적이 없으면 신선하지 않다', () => {
+  assert.equal(isFollowerCacheFresh(null, NOW), false);
+  assert.equal(isFollowerCacheFresh({ isFollower: null, followerCheckedAt: null }, NOW), false);
 });

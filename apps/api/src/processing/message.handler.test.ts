@@ -505,3 +505,67 @@ test('게이트에 막혀도 팔로워 캐시는 저장된다 — 매번 다시 
   assert.equal(data.isFollower, false);
   assert.deepEqual(data.followerCheckedAt, new Date(7000));
 });
+
+// ── 빠른 경로 사용자의 캐시 갱신 ──────────────────────────────────
+//
+// 확인 단계를 건너뛴 사람은 대화가 FORM_SENT 로 시작하므로 조건부 UPDATE 에 항상 걸린다.
+// 그 경로에서 캐시를 갱신하지 않으면, 최적화 대상인 단골에게서만 캐시가 만료되고
+// 다시는 갱신되지 않는 자기모순이 된다.
+
+test('양식을 이미 보낸 사람의 답장에서도 캐시가 만료됐으면 갱신한다', async () => {
+  const f = buildCtx({
+    conversation: {
+      igAccountId: ACCOUNT_ID,
+      igsid: IGSID,
+      state: 'FORM_SENT',
+      lastMediaId: 'media_1',
+      lastCampaignId: null,
+    } as never,
+    isFollower: true,
+  });
+
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(f.calls.includes('isUserFollowBusiness'), '만료된 캐시는 다시 조회한다');
+  assert.ok(!f.calls.includes('sendMessage'), '양식을 다시 보내지는 않는다');
+});
+
+// 답장 하나마다 API 를 한 번씩 쓰면 캐시를 둔 의미가 없다.
+test('캐시가 신선하면 다시 조회하지 않는다', async () => {
+  const f = buildCtx({
+    conversation: {
+      igAccountId: ACCOUNT_ID,
+      igsid: IGSID,
+      state: 'FORM_SENT',
+      lastMediaId: 'media_1',
+      lastCampaignId: null,
+      isFollower: true,
+      followerCheckedAt: new Date(Date.now() - 1000),
+    } as never,
+    isFollower: true,
+  });
+
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(!f.calls.includes('isUserFollowBusiness'));
+});
+
+// 비팔로워도 확인은 신선하다. 뭉쳐서 판단하면 그 사람 답장마다 조회가 나간다.
+test('비팔로워로 확인된 신선한 캐시도 다시 조회하지 않는다', async () => {
+  const f = buildCtx({
+    conversation: {
+      igAccountId: ACCOUNT_ID,
+      igsid: IGSID,
+      state: 'FORM_SENT',
+      lastMediaId: 'media_1',
+      lastCampaignId: null,
+      isFollower: false,
+      followerCheckedAt: new Date(Date.now() - 1000),
+    } as never,
+    isFollower: false,
+  });
+
+  await handleMessage(buildEvent(), f.ctx);
+
+  assert.ok(!f.calls.includes('isUserFollowBusiness'));
+});
