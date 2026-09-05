@@ -2,6 +2,7 @@ import type { Campaign, IgAccount, PrismaClient } from '../generated/prisma/clie
 import type { EventType, SkipReason } from '../generated/prisma/enums.ts';
 import type { InstagramApiClient } from '../instagram/client.ts';
 import { InstagramApiError } from '../instagram/errors.ts';
+import { type FollowerCache, isFollowerCacheFresh } from './follower-cache.ts';
 
 /**
  * 핸들러가 공유하는 실행 컨텍스트.
@@ -114,4 +115,49 @@ export function extractErrorCode(error: unknown): string {
   }
   if (error instanceof Error) return error.name || 'UNKNOWN';
   return 'UNKNOWN';
+}
+
+
+/**
+ * 팔로워 여부 조회. **절대 던지지 않습니다** — 팔로워 여부는 발송의 전제조건이 아니라
+ * 부가 정보입니다. 여기서 던지면 이미 나간 발송을 SQS 가 재시도하게 됩니다.
+ */
+export async function checkFollower(ctx: HandlerContext, igsid: string): Promise<boolean | null> {
+  try {
+    return await ctx.instagram.isUserFollowBusiness(igsid);
+  } catch (cause) {
+    console.error('팔로워 여부 조회 실패', { igsid, cause: String(cause) });
+    return null;
+  }
+}
+
+/**
+ * 캐시가 만료됐으면 다시 조회해 갱신하고, 최신 캐시를 돌려줍니다.
+ *
+ * **대화가 없으면 아무것도 하지 않습니다** — `is_user_follow_business` 는 대화 성립 후에만
+ * 조회되기 때문입니다 (docs/meta-api.md §1-13). 처음 보는 사람에게는 이 길이 없습니다.
+ *
+ * 신선하면 API 를 부르지 않습니다. TTL 은 값에 따라 다릅니다(`ttlFor`) — `false` 는 우리
+ * 메시지 때문에 곧 바뀔 값이라 짧게 잡혀 있고, 그래서 팔로우 직후 댓글에서 이 함수가
+ * 실제로 다시 물어보게 됩니다.
+ */
+export async function refreshFollowerCache(
+  ctx: HandlerContext,
+  cache: FollowerCache | null,
+  igsid: string,
+  now: number,
+): Promise<FollowerCache | null> {
+  if (!cache) return null;
+  if (isFollowerCacheFresh(cache, now)) return cache;
+
+  const isFollower = await checkFollower(ctx, igsid);
+  // 못 얻었으면 건드리지 않습니다. checkedAt 만 새로 찍으면 "모름" 이 TTL 동안 굳습니다.
+  if (isFollower === null) return cache;
+
+  const followerCheckedAt = new Date(now);
+  await ctx.prisma.conversation.updateMany({
+    where: { igAccountId: ctx.account.id, igsid },
+    data: { isFollower, followerCheckedAt },
+  });
+  return { isFollower, followerCheckedAt };
 }

@@ -17,6 +17,7 @@
 | 2 | 커멘터 식별자 | `changes[].value.from.id` 가 IGSID (`from.username`도 옴) | 대화 상태를 못 만듦 |
 | 3 | 메시지 webhook 형태 | `entry[].messaging[]` 배열 (Messenger 형식) | 댓글과 같은 형태로 파싱하면 실패 |
 | 4 | **echo 필터** | 봇이 보낸 DM이 `messaging[].message.is_echo === true` (`is_self`도) 로 되돌아옴 | **무한루프.** 자기 메시지에 자기가 반응 |
+| 4.1 | **다른 테스터 계정의 웹훅이 섞여 온다** | 같은 Meta 앱에 Instagram 테스터로 등록된 **다른 계정** 앞으로도 웹훅이 발사되어 같은 콜백 URL 로 온다. `entry.id` 가 우리 계정과 다르다 | 우리 계정 통계에 남의 이벤트가 섞인다. `entry.id` 를 반드시 대조하고, 불일치는 **기록하지 말고 로그만** 남긴다 |
 | 5 | **셀프 댓글 필터** | 내 계정이 내 글에 단 댓글도 webhook이 발사됨. `value.from.id === entry.id` 로 판별 | 자기 자신에게 DM 시도 → 실패 + 로그 오염 |
 | 6 | **계정 구독** | App Dashboard의 필드 구독만으로는 부족. 계정마다 `POST /v25.0/me/subscribed_apps?subscribed_fields=comments,messages` 필요. **그리고 이 호출은 조용히 절반만 성공한다** — 아래 §1.1 | **webhook이 아예 안 온다.** 가장 흔한 삽질 |
 | 7 | **App Secret 2종** | 앱 구성에 따라 서명 키가 Instagram app secret **또는 상위 Meta app secret**. 둘 다 시도해야 함. **계정마다 다른 Meta 앱을 쓰므로 계정별 값**이다 — `IgAccount.parentAppSecretEnc`(nullable)에 둔다. 403이 계속되면 이걸 채워본다 | 403만 반복되고 원인 파악이 오래 걸림 |

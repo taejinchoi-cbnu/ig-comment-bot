@@ -98,26 +98,32 @@ export async function handleReceive(
 /**
  * 버려진 이벤트를 통계에 남깁니다 — "왜 DM 이 안 갔지?" 에 답하려면 기록이 필요합니다.
  *
- * 단 **ECHO 는 남기지 않습니다.** 우리가 DM 을 보낼 때마다 하나씩 되돌아오므로
- * 기록하면 Event 테이블이 순수 노이즈로 두 배가 되고 분석에 아무 도움이 안 됩니다.
+ * 단 **ECHO 와 ACCOUNT_MISMATCH 는 남기지 않습니다.** 둘 다 우리가 DM 을 보낼 때마다
+ * 되돌아와 Event 테이블을 노이즈로 채우고, 어느 쪽도 "왜 DM 이 안 갔지?" 에 답하지
+ * 않습니다 (하나는 우리 메시지, 하나는 남의 계정 이벤트).
  */
 async function recordSkipped(
   result: NormalizeResult,
   account: ResolvedAccount,
   deps: WebhookDeps,
 ): Promise<void> {
-  // ACCOUNT_MISMATCH 는 발송 직후마다 하나씩 쌓이는데 원인을 모릅니다. 이 계정은
-  // GET /me 가 user_id 와 id 두 개를 돌려주므로 둘 중 하나일 수 있으나 추측으로 고치지
-  // 않습니다. 실제로 온 값을 남겨 다음 한 번으로 특정합니다. 계정 ID 는 본문도 토큰도
-  // 아니라 로그 규칙에 걸리지 않습니다.
-  // (normalize.ts 는 순수 함수라 로그를 넣지 않습니다 — AGENTS.md 불변식 4)
+  // 진단 로그는 남깁니다. 계정 ID 는 본문도 토큰도 아니라 로그 규칙에 걸리지 않습니다.
+  // (normalize.ts 는 순수 함수라 여기 둡니다 — AGENTS.md 불변식 4)
   for (const s of result.skipped) {
     if (s.reason === 'ACCOUNT_MISMATCH') {
       console.warn('entry.id 가 계정과 불일치', { expected: account.igUserId, got: s.igUserId });
     }
   }
 
-  const worth = result.skipped.filter((s) => s.reason !== 'ECHO');
+  // ECHO 와 ACCOUNT_MISMATCH 는 기록하지 않습니다. 둘 다 발송 1건당 여러 행이 쌓여
+  // Event 테이블을 노이즈로 채우고 Phase 3 통계에 유령 스킵을 만듭니다.
+  //
+  // ACCOUNT_MISMATCH 의 정체는 실사용 로그로 확정했습니다 — **같은 Meta 앱의 Instagram
+  // 테스터로 등록된 다른 계정 앞으로 발사된 웹훅**입니다. 우리 DB 에 없는 계정이라
+  // 우리 계정의 통계에 들어갈 이유가 없습니다. 우리가 DM 을 보낼 때마다 그 계정 관점의
+  // echo 까지 함께 와서 발송 1건당 2~3행이 쌓이고 있었습니다.
+  const NOT_WORTH_RECORDING = new Set(['ECHO', 'ACCOUNT_MISMATCH']);
+  const worth = result.skipped.filter((s) => !NOT_WORTH_RECORDING.has(s.reason));
   if (worth.length === 0) return;
 
   try {

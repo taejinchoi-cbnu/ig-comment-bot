@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FOLLOWER_TTL_MS, isFollowerCacheFresh, isKnownFollower } from './follower-cache.ts';
+import {
+  FOLLOWER_TTL_MS,
+  NON_FOLLOWER_TTL_MS,
+  isFollowerCacheFresh,
+  isKnownFollower,
+  ttlFor,
+} from './follower-cache.ts';
 
 const NOW = 1_800_000_000_000;
 const ago = (ms: number) => new Date(NOW - ms);
@@ -69,4 +75,22 @@ test('만료된 캐시는 값과 무관하게 신선하지 않다', () => {
 test('확인한 적이 없으면 신선하지 않다', () => {
   assert.equal(isFollowerCacheFresh(null, NOW), false);
   assert.equal(isFollowerCacheFresh({ isFollower: null, followerCheckedAt: null }, NOW), false);
+});
+
+// ── 비대칭 TTL ────────────────────────────────────────────────────
+//
+// true 는 잘 안 바뀌지만, false 는 우리 1차 DM("팔로우 확인할게요") 때문에 바로 바뀐다.
+// 같은 기간을 믿으면 시키는 대로 팔로우한 사람에게 30일 동안 같은 걸 또 묻게 된다.
+
+test('true 는 길게, false 와 모름은 짧게 믿는다', () => {
+  assert.equal(ttlFor({ isFollower: true, followerCheckedAt: ago(0) }), FOLLOWER_TTL_MS);
+  assert.equal(ttlFor({ isFollower: false, followerCheckedAt: ago(0) }), NON_FOLLOWER_TTL_MS);
+  assert.equal(ttlFor({ isFollower: null, followerCheckedAt: null }), NON_FOLLOWER_TTL_MS);
+  assert.equal(ttlFor(null), NON_FOLLOWER_TTL_MS);
+});
+
+test('같은 나이라도 false 는 만료되고 true 는 신선하다', () => {
+  const twoHours = 2 * 60 * 60 * 1000;
+  assert.equal(isFollowerCacheFresh({ isFollower: false, followerCheckedAt: ago(twoHours) }, NOW), false);
+  assert.equal(isFollowerCacheFresh({ isFollower: true, followerCheckedAt: ago(twoHours) }, NOW), true);
 });

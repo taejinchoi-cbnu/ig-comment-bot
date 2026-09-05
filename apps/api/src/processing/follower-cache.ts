@@ -12,17 +12,29 @@
  * 순수 함수로 유지하세요 (node --test 대상, 데코레이터 금지).
  */
 
-/**
- * 팔로우는 언제든 끊깁니다. 짧게 잡으면 캐시가 무의미해지고, 길게 잡으면 이미 언팔한
- * 사람에게 팔로워 대접을 계속하게 됩니다. 30일이면 "같은 계정이 다음 게시물에 또
- * 댓글을 다는" 주기를 대체로 덮으면서 오차가 한 달을 넘지 않습니다.
- */
-export const FOLLOWER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
 export type FollowerCache = {
   isFollower: boolean | null;
   followerCheckedAt: Date | null;
 };
+
+/**
+ * **TTL 이 값에 따라 다릅니다.** 두 값이 바뀌는 속도가 다르기 때문입니다.
+ *
+ * `true`(팔로워임)는 잘 안 바뀝니다. 30일이면 "같은 계정이 다음 게시물에 또 댓글을 다는"
+ * 주기를 대체로 덮고, 그 사이 언팔했더라도 손해는 양식을 한 번 더 보내는 정도입니다.
+ *
+ * `false`는 **우리 메시지 때문에 바로 바뀌는 값**입니다. 1차 DM 이 "팔로우 확인할게요"
+ * 라고 시켜놓고, 시키는 대로 한 사람에게 30일 동안 계속 같은 걸 묻는 건 앞뒤가 안 맞습니다.
+ * 실제로 팔로우 직후 댓글에서 확인 문구가 또 나가는 걸 보고 나눴습니다.
+ */
+export const FOLLOWER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const NON_FOLLOWER_TTL_MS = 60 * 60 * 1000;
+
+/** 캐시된 값에 맞는 TTL. 값이 없으면(모름) 짧은 쪽을 씁니다 — 빨리 다시 물어봐야 합니다. */
+export function ttlFor(cache: FollowerCache | null | undefined): number {
+  return cache?.isFollower === true ? FOLLOWER_TTL_MS : NON_FOLLOWER_TTL_MS;
+}
+
 
 /**
  * "이 값을 다시 물어볼 필요가 없는가." **값이 무엇인지와 무관합니다.**
@@ -33,7 +45,7 @@ export type FollowerCache = {
 export function isFollowerCacheFresh(
   cache: FollowerCache | null | undefined,
   now: number,
-  ttlMs: number = FOLLOWER_TTL_MS,
+  ttlMs: number = ttlFor(cache),
 ): boolean {
   const checkedAt = cache?.followerCheckedAt;
   if (!checkedAt) return false; // 확인한 적이 없거나 시점이 없으면 만료 판정이 불가능하다
@@ -49,7 +61,7 @@ export function isFollowerCacheFresh(
 export function isKnownFollower(
   cache: FollowerCache | null | undefined,
   now: number,
-  ttlMs: number = FOLLOWER_TTL_MS,
+  ttlMs: number = ttlFor(cache),
 ): boolean {
   return cache?.isFollower === true && isFollowerCacheFresh(cache, now, ttlMs);
 }

@@ -19,7 +19,14 @@
  */
 
 import type { CommentEvent } from '../webhook/normalize.ts';
-import { extractErrorCode, type HandlerContext, isRetryableError, nowMs, recordEvent } from './context.ts';
+import {
+  extractErrorCode,
+  type HandlerContext,
+  isRetryableError,
+  nowMs,
+  recordEvent,
+  refreshFollowerCache,
+} from './context.ts';
 import { resolveTemplates } from './templates.ts';
 import { shouldTrigger } from './trigger.ts';
 import { isKnownFollower } from './follower-cache.ts';
@@ -117,7 +124,13 @@ export async function handleComment(event: CommentEvent, ctx: HandlerContext): P
   // 캐시 만료 판정과 발송 시작을 같은 시점으로 본다. 둘 사이는 분기 하나뿐이라
   // 차이가 무의미하고, now() 를 두 번 부르면 테스트에서 시퀀스만 어긋난다.
   const startedAt = nowMs(ctx);
-  const skipConfirmation = isKnownFollower(existing, startedAt);
+
+  // 캐시가 만료됐으면 여기서 다시 물어본다. 1차 DM 이 "팔로우 확인할게요" 라고 시켜놓고
+  // 시키는 대로 한 사람에게 또 같은 걸 묻는 걸 막는 지점이다 — false 는 TTL 이 짧아
+  // (follower-cache.ts ttlFor) 팔로우 직후 댓글이 실제로 이 경로를 탄다.
+  // 대화가 없는 사람에게는 조회 자체가 불가능하므로 그대로 2단계로 간다.
+  const cache = await refreshFollowerCache(ctx, existing, event.igsid, startedAt);
+  const skipConfirmation = isKnownFollower(cache, startedAt);
   const replyText = skipConfirmation ? templates.followUp : templates.privateReply;
   const nextState = skipConfirmation ? 'FORM_SENT' : 'WAITING_USER_MESSAGE';
 

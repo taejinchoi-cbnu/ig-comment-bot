@@ -4,7 +4,7 @@ import { handleComment } from './comment.handler.ts';
 import type { HandlerAccount, HandlerCampaign, HandlerContext, EventInput } from './context.ts';
 import { InstagramApiError } from '../instagram/errors.ts';
 import type { CommentEvent } from '../webhook/normalize.ts';
-import { FOLLOWER_TTL_MS } from './follower-cache.ts';
+import { FOLLOWER_TTL_MS, NON_FOLLOWER_TTL_MS } from './follower-cache.ts';
 
 // ── 픽스처 ────────────────────────────────────────────────────────
 
@@ -41,6 +41,8 @@ function createFakeCtx(opts: {
   campaign?: HandlerCampaign | null;
   /** 기존 대화 = 팔로워 캐시. null 이면 처음 보는 사람. */
   conversation?: { isFollower: boolean | null; followerCheckedAt: Date | null } | null;
+  /** isUserFollowBusiness 가 돌려줄 값. 만료된 캐시를 다시 조회할 때만 쓰인다. */
+  liveIsFollower?: boolean | null;
   createSentReplyError?: unknown;
   sendPrivateReplyError?: unknown;
   replyToCommentError?: unknown;
@@ -55,6 +57,7 @@ function createFakeCtx(opts: {
   let sentReplyDeleteArgs: unknown = undefined;
   const commentReplies: { commentId: string; message: string }[] = [];
   const privateReplies: string[] = [];
+  let cacheWrite: unknown = undefined;
   let nowIdx = 0;
   const nowSequence = opts.nowSequence ?? [1000, 1500];
 
@@ -86,6 +89,11 @@ function createFakeCtx(opts: {
         },
       },
       conversation: {
+        updateMany: async (args: unknown) => {
+          calls.push('conversation.updateMany');
+          cacheWrite = args;
+          return { count: 1 } as never;
+        },
         findUnique: async () => {
           calls.push('conversation.findUnique');
           return opts.conversation ?? null;
@@ -112,7 +120,10 @@ function createFakeCtx(opts: {
         if (opts.sendPrivateReplyError) throw opts.sendPrivateReplyError;
         return { recipientId: 'igsid_1', messageId: 'mid_1' };
       },
-      isUserFollowBusiness: async () => null,
+      isUserFollowBusiness: async () => {
+        calls.push('isUserFollowBusiness');
+        return opts.liveIsFollower ?? null;
+      },
       sendMessage: async () => {
         throw new Error('이 테스트에서는 쓰이지 않는다');
       },
@@ -133,6 +144,7 @@ function createFakeCtx(opts: {
     events,
     commentReplies,
     privateReplies,
+    cacheWrite: () => cacheWrite,
     deleteCalled: () => deleteCalled,
     upsertArgs: () => upsertArgs,
     sentReplyCreateArgs: () => sentReplyCreateArgs,
@@ -445,3 +457,59 @@ test('처음 보는 사람은 기존 2단계로 간다', async () => {
   assert.ok(!f.events.some((e) => e.type === 'FOLLOW_UP_SENT'));
 });
 
+
+// ── 만료된 캐시는 댓글 시점에 다시 물어본다 ──────────────────────
+//
+// 실사용에서 나온 시나리오다. 1차 DM 이 "팔로우 확인할게요" 라고 시켰고, 사용자가 팔로우한
+// 뒤 새 게시물에 댓글을 달았는데 **같은 확인 문구가 또 나갔다.** 캐시가 false 로 신선했고
+// 댓글 경로는 캐시를 읽기만 했기 때문이다. false 의 TTL 을 짧게 잡고 여기서 재조회한다.
+
+const staleFalse = { isFollower: false, followerCheckedAt: new Date(1000 - NON_FOLLOWER_TTL_MS - 1) };
+
+test('캐시가 false 로 만료됐고 그 사이 팔로우했으면 다시 조회해 빠른 경로를 탄다', async () => {
+  const f = createFakeCtx({ conversation: staleFalse, liveIsFollower: true });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(f.calls.includes('isUserFollowBusiness'), '만료됐으므로 다시 물어본다');
+  assert.deepEqual(f.privateReplies, ['캠페인 후속 문구'], '확인 문구 없이 양식이 바로 나간다');
+});
+
+test('재조회 결과를 캐시에 다시 쓴다 — 다음 댓글에서 또 묻지 않도록', async () => {
+  const f = createFakeCtx({ conversation: staleFalse, liveIsFollower: true });
+  await handleComment(baseEvent, f.ctx);
+
+  const w = f.cacheWrite() as { data: Record<string, unknown> };
+  assert.equal(w.data.isFollower, true);
+  assert.deepEqual(w.data.followerCheckedAt, new Date(1000));
+});
+
+// 답장할 때마다가 아니라 만료됐을 때만 물어봐야 캐시를 둔 의미가 있다.
+test('캐시가 신선하면 댓글 시점에 조회하지 않는다', async () => {
+  const f = createFakeCtx({
+    conversation: { isFollower: false, followerCheckedAt: new Date(1000 - 60_000) },
+    liveIsFollower: true,
+  });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(!f.calls.includes('isUserFollowBusiness'));
+  assert.deepEqual(f.privateReplies, ['캠페인 문구'], '신선한 false 를 믿고 2단계로 간다');
+});
+
+// 대화가 없으면 is_user_follow_business 자체가 조회되지 않는다 (meta-api.md §1-13).
+test('처음 보는 사람에게는 조회를 시도조차 하지 않는다', async () => {
+  const f = createFakeCtx({ conversation: null, liveIsFollower: true });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(!f.calls.includes('isUserFollowBusiness'));
+  assert.deepEqual(f.privateReplies, ['캠페인 문구']);
+});
+
+// 조회가 실패했다고 캐시를 덮으면 "모름" 이 TTL 동안 굳는다.
+test('재조회가 실패하면 캐시를 건드리지 않고 기존 값으로 판단한다', async () => {
+  const f = createFakeCtx({ conversation: staleFalse, liveIsFollower: null });
+  await handleComment(baseEvent, f.ctx);
+
+  assert.ok(f.calls.includes('isUserFollowBusiness'));
+  assert.equal(f.cacheWrite(), undefined, '캐시를 쓰지 않는다');
+  assert.deepEqual(f.privateReplies, ['캠페인 문구']);
+});

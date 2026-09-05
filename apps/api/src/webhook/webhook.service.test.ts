@@ -216,3 +216,20 @@ test('POST: enqueue 부분 실패는 successful 개수를 정확히 반영한다
   const out = await handleReceive('abc123', Buffer.from(body), signBody(body, APP_SECRET), deps);
   assert.equal(out.enqueued, 1, '2건 중 1건만 성공했다면 1을 돌려줘야 한다');
 });
+
+// 정체는 실사용 로그로 확정했다 — 같은 Meta 앱의 Instagram 테스터로 등록된 **다른 계정**
+// 앞으로 발사된 웹훅이다. 우리가 DM 을 보낼 때마다 그 계정 관점의 echo 까지 와서 발송
+// 1건당 2~3행이 쌓이고 있었다. 우리 계정 통계에 들어갈 이유가 없다.
+test('POST: ACCOUNT_MISMATCH 는 기록하지 않는다 — 남의 계정 이벤트다', async () => {
+  const { deps, captured } = buildDeps();
+  const body = JSON.stringify({
+    object: 'instagram',
+    entry: [{ id: '99999999999999999', changes: [] }],
+  });
+
+  const out = await handleReceive('abc123', Buffer.from(body), signBody(body, APP_SECRET), deps);
+
+  assert.equal(out.status, 200);
+  assert.equal(out.skipped, 1, 'normalize 는 걸러냈다');
+  assert.equal(captured.events.length, 0, '하지만 Event 로는 남기지 않는다');
+});
