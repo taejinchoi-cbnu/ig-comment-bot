@@ -1,14 +1,17 @@
 # Phase 1 — 파이프라인 (웹 없음)
 
-> **상태**: 코드·인프라·`/code-review medium`·운영 스크립트까지 완료. **아직 배포 전.**
+> **상태**: ✅ **완료 기준 충족.** 배포·Meta 연결·실계정 E2E 전부 통과.
+> 앱에 역할이 없는 **제3 계정에서도 동작 확인** → [`meta-api.md`](./meta-api.md) §4 모델 B 성립.
 > |   **선행**: Phase 0 (문서화)
 >
 > **완료 기준**: 두 번째 인스타 계정으로 실제 댓글을 달면 1차 DM이 오고, 답장하면 후속 DM이 오며,
-> 중복·셀프 댓글·echo가 전부 걸러진다. DLQ는 비어 있다.
+> 중복·셀프 댓글·echo가 전부 걸러진다. DLQ는 비어 있다. → **전부 확인됨**
 >
-> **다음 세션 시작점**: [§7-1 배포](#7-배포--meta-연결--다음-세션-여기부터) 부터.
-> 스크립트 두 개(`create-secret.sh`, `connect-account.ts`)는 준비돼 있고 남은 것은 실행과 Meta 대시보드 작업뿐이다.
-> 검증은 [Stage A(계정 하나로 가능)](#stage-a--계정-하나로-지금-배포-직후) → Stage B 순서로 한다.
+> **다음 세션 시작점**: [§7-3 캠페인](#7-3-캠페인-2개-sql) — 게시물별 문구(검증 #5)만 남았다.
+> 그 뒤 [Phase 2](./phase-2-web.md). 미해결 항목은 [§남은 것](#남은-것) 참고.
+>
+> 실전 기록: [`study/2026-09-04-1.md`](../study/2026-09-04-1.md) (배포·연결) ·
+> [`study/2026-09-04-2.md`](../study/2026-09-04-2.md) (실사용이 깬 설계 가정)
 
 ## 목표
 
@@ -73,7 +76,7 @@
 - [x] `scripts/deploy.sh` 가 `pnpm -F @ig/api build:lambda`(esbuild 번들, [`architecture.md`](./architecture.md) §배포) 를 호출하도록 연결.
   `nest build` 산출물은 `node_modules` 를 안 담아 그대로 배포하면 콜드스타트에서 죽는다는 걸
   실제 Function URL 이벤트로 부팅해서 확인 후 고쳤다.
-- [ ] 배포 후 Function URL 확보 → §7-1
+- [x] 배포 후 Function URL 확보 → §7-1
 
 ### 7. 배포 · Meta 연결 ← **다음 세션 여기부터**
 
@@ -87,22 +90,26 @@ pnpm verify                 # typecheck → test → build
 scripts/create-secret.sh    # ops/deploy.env → Secrets Manager (MASTER_KEY 32바이트·pooled URL 검증)
 scripts/deploy.sh           # → Outputs 의 ApiFunctionUrl 확보
 ```
-- [ ] Secrets Manager `ig-comment-bot/dev/app` 생성
-- [ ] 스택 배포 + Function URL 확보
+- [x] Secrets Manager `ig-comment-bot/dev/app` 생성
+- [x] 스택 배포 + Function URL 확보
 
 > `MASTER_KEY` 는 `ops/deploy.env`(스크립트가 암호화할 때)와 Secrets Manager(Lambda가 복호화할 때)
 > 사이에서 바이트 단위로 같아야 한다. `create-secret.sh` 가 한 파일에서 둘 다 파생시키므로
 > 불일치라는 버그 종류 자체가 없다.
 
 **7-2. Meta 앱 → 계정 등록**
-- [ ] [`meta-api.md`](./meta-api.md) §4 1~3단계 + **[§4.1 대시보드 화면 위치](./meta-api.md#41-대시보드-어디를-누르는가)**
+- [x] [`meta-api.md`](./meta-api.md) §4 1~3단계 + **[§4.1 대시보드 화면 위치](./meta-api.md#41-대시보드-어디를-누르는가)**
   로 토큰(60일)·Instagram app secret 확보. 권한에 `instagram_business_manage_insights` 포함(Phase 3)
-- [ ] `ops.example/accounts/example.json` → `ops/accounts/<slug>.json` 으로 복사해 채우기
-- [ ] `pnpm connect-account ops/accounts/<slug>.json`
+- [x] `ops.example/accounts/example.json` → `ops/accounts/<slug>.json` 으로 복사해 채우기
+- [x] `pnpm connect-account ops/accounts/<slug>.json`
   → 토큰 검증(`getMe`) · **`subscribed_apps` 호출(§4 6단계)** · 암호화 저장 · verify token 발급까지 한 번에.
   `igUserId` 는 손으로 찾지 않는다 — `getMe()` 가 돌려준다
-- [ ] 출력된 Callback URL / Verify Token 을 Meta Webhooks 에 입력 → *Verify and Save* → `comments`, `messages` 구독
-- [ ] 두 번째 계정을 **Instagram Tester로 초대 → 수락** (Stage B 에 필요)
+- [x] 출력된 Callback URL / Verify Token 을 Meta Webhooks 에 입력 → *Verify and Save* → `comments`, `messages` 구독
+- [x] 두 번째 계정을 **Instagram Tester로 초대 → 수락** (Stage B 에 필요)
+- [x] **연동할 본인 계정도 Instagram 테스터여야 한다** — 토큰 발급 목록에 테스터만 뜬다
+- [x] **앱을 라이브 모드로 전환** ← 실제 관문. 개발 모드에서는 수동 테스트 페이로드만 배달되고
+  실제 이벤트가 발생하지 않는다. 라이브 전환은 App Review 와 무관하다 (Standard Access 유지)
+- [x] 라이브 전환 요건인 **개인정보처리방침 URL** — `apps/api/src/legal.controller.ts` 의 `/privacy`
 
 `parentAppSecret` 은 보통 `null` 로 둔다(§8의 #5) — 서명이 계속 403일 때만 채운다.
 
@@ -153,12 +160,12 @@ $AWS logs tail /aws/lambda/ig-comment-bot-dev-Worker --follow &
 
 ### Stage A — 계정 하나로 지금 (배포 직후)
 
-| # | 동작 | 기대 |
-|---|---|---|
-| A1 | Meta Webhooks *Verify and Save* | 200 + challenge 반향 |
-| A2 | 없는 slug 로 `GET /webhook/nope` | 404 |
-| A3 | 위조 서명으로 `POST /webhook/<slug>` | 403 |
-| A4 | **내 계정으로 내 글에 댓글** | `Event(COMMENT_SKIPPED, SELF_COMMENT)` 행 |
+| # | 동작 | 기대 | 결과 |
+|---|---|---|---|
+| A1 | Meta Webhooks *Verify and Save* | 200 + challenge 반향 | ✅ |
+| A2 | 없는 slug 로 `GET /webhook/nope` | 404 | ✅ |
+| A3 | 위조 서명으로 `POST /webhook/<slug>` | 403 | ✅ 헤더 없음·짧은 서명 포함, 예외 없이 |
+| A4 | **내 계정으로 내 글에 댓글** | `Event(COMMENT_SKIPPED, SELF_COMMENT)` 행 | ✅ |
 
 A4 가 통과하면 **`subscribed_apps` 성공 + 서명 검증 성공**이 동시에 증명된다 —
 [`meta-api.md`](./meta-api.md) §6 결정 트리의 1·2순위 의심 항목이 둘 다 걷힌다.
@@ -170,18 +177,40 @@ A4 가 통과하면 **`subscribed_apps` 성공 + 서명 검증 성공**이 동�
 (§1-12), Standard Access 에서는 상대 계정이 앱 role 을 가져야 발송된다 (§1-11).
 두 번째 계정은 이메일만 있으면 2분, Tester 초대는 App Roles → 초대 → 해당 계정에서 수락.
 
-| # | 동작 | 기대 |
-|---|---|---|
-| 1 | 두 번째 계정으로 게시물 A에 댓글 | webhook 200 → SQS → 워커 → **1차 DM 도착** |
-| 3 | 두 번째 계정에서 DM 답장 | **A의 캠페인 문구** 도착 |
-| 4 | 봇이 보낸 DM의 echo webhook | skip. **무한루프 없음** |
-| 5 | 게시물 B(다른 문구)로 1~3 반복 | **B의 문구** 도착 (A와 다름) |
-| 6 | 캠페인 없는 게시물 C | 계정 기본 문구로 폴백 |
-| 7 | 같은 댓글 payload 재전송(올바른 서명) | 재발송 없음. `skipReason=DUPLICATE` |
-| 9 | DB | `conversations.state = FORM_SENT`, `events` 행 누적 |
-| 10 | DLQ | `ApproximateNumberOfMessages = 0` |
+| # | 동작 | 기대 | 결과 |
+|---|---|---|---|
+| 1 | 두 번째 계정으로 게시물 A에 댓글 | webhook 200 → SQS → 워커 → **1차 DM 도착** | ✅ 4500ms |
+| 3 | 두 번째 계정에서 DM 답장 | 후속 문구 도착 | ✅ 1201ms, `FORM_SENT` |
+| 4 | 봇이 보낸 DM의 echo webhook | skip. **무한루프 없음** | ✅ Event 기록도 안 함 |
+| 5 | 게시물 B(다른 문구)로 1~3 반복 | **B의 문구** 도착 (A와 다름) | ⬜ **캠페인이 없어 미검증** |
+| 6 | 캠페인 없는 게시물 | 폴백 문구 | ✅ 3단 폴백의 마지막 단(시스템 기본)까지 |
+| 7 | 같은 사람이 같은 글에 댓글 또 | 재발송 없음. `skipReason=DUPLICATE` | ✅ |
+| 9 | DB | `conversations.state = FORM_SENT`, `events` 행 누적 | ✅ |
+| 10 | DLQ | `ApproximateNumberOfMessages = 0` | ✅ |
+| **11** | **앱에 역할이 없는 제3 계정으로 댓글** | 동작해야 모델 B 성립 | ✅ **성립** |
+| **12** | 팔로워로 확인된 사람이 새 게시물에 댓글 | 확인 단계 건너뛰고 양식 바로 | ✅ 30초 → **1초** |
+
+> **#5 만 남았다.** 나머지는 실계정에서 전부 통과했다. 게시물별 문구는 캠페인 2개를
+> 넣어야 판별되므로 §7-3 이 남은 이유이기도 하다.
 
 막히면 [`meta-api.md`](./meta-api.md) §6 트러블슈팅 결정 트리부터.
+
+## 남은 것
+
+Phase 1 완료 기준은 충족했다. 아래는 **Phase 2 착수를 막지는 않는** 잔여 항목이다.
+
+| 항목 | 언제 해야 하나 |
+|---|---|
+| **캠페인 2개 → 게시물별 문구 검증(#5)** | 지금. §7-3. 캠페인은 암호화 필드가 없어 SQL 로 넣으면 된다 |
+| 비대칭 TTL 실사용 검증 | 언팔 → 댓글 → 1시간 내 재팔로우 → 새 게시물 댓글 |
+| 게이트 재발송 루프 (`ConversationState.GATE_SENT`) | **팔로워 게이트를 켜기 전에.** 지금은 기본 꺼짐이라 무해하다 |
+| 게이트의 `COMMENT_SKIPPED`+`mediaId` 이중 집계 | Phase 3 퍼널 만들기 전에 |
+| `USER_REPLIED` 없는 `FOLLOW_UP_SENT` (빠른 경로) | 위와 같이. 답장→양식 전환율이 100% 를 넘는다 |
+| 대댓글이 만드는 `SELF_COMMENT` Event 노이즈 | Phase 3 전에. `ECHO`·`ACCOUNT_MISMATCH` 와 같은 판단이 필요하다 |
+
+> `ACCOUNT_MISMATCH` 는 **해결됐다.** 정체는 같은 Meta 앱의 Instagram 테스터로 등록된
+> 다른 계정 앞으로 발사된 웹훅이었고([`meta-api.md`](./meta-api.md) §1-4.1),
+> `ECHO` 와 같이 Event 기록에서 제외했다. 로그는 남긴다.
 
 ## 참고
 

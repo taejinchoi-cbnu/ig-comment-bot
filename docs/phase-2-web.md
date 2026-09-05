@@ -1,8 +1,11 @@
 # Phase 2 — 웹 (지인이 실제로 쓸 수 있는 최소)
 
-> **상태**: 대기   |   **선행**: Phase 1
+> **상태**: 🟡 **다음 단계**   |   **선행**: Phase 1 ✅ (배포·Meta 연결·실계정 E2E 완료)
 >
 > **완료 기준**: **지인 1명이 나 없이 자기 게시글에 자동 DM을 건다.**
+>
+> Phase 1 에서 **모델 B 가 성립함을 실계정으로 확인**했다 — 앱에 역할이 없는 제3 계정에도
+> DM 이 나간다. App Review 없이 서비스가 성립한다는 전제가 검증됐다.
 
 ## 목표
 
@@ -19,12 +22,25 @@ Phase 1로 파이프라인은 돌지만 SQL을 직접 써야 한다. 여기서 �
 
 ### 1. API
 - [ ] `auth/` — 가입(상태 `pending`) · 로그인 · JWT · argon2. JWT 서명키는 Secrets Manager
-- [ ] `accounts/` — 연결 마법사 3단계
+- [ ] `accounts/` — 연결 마법사 3단계.
+      **`scripts/connect-account.ts` 가 이 흐름을 이미 CLI 로 구현해 뒀다** — 순서와 함정이
+      거기 주석에 있다. 컨트롤러는 그 순서를 그대로 옮기면 된다
   - [ ] 자격증명 저장(암호화) + `slug`·`verifyToken` 생성 → **webhook URL 반환**
-  - [ ] `[연결 확인]` → `GET /me` 토큰 검증 + **`POST /me/subscribed_apps`** → 상태 `connected`
-  - [ ] 실패 시 사람이 읽는 오류 (토큰 만료 / 권한 부족 / 계정 불일치)
+        (재연결 시 `verifyToken` 을 유지할 것. 갈아치우면 Meta 에 등록된 값이 죽는다)
+  - [ ] `[연결 확인]` → `GET /me` 토큰 검증 + **`POST /me/subscribed_apps`**
+        → **호출 응답을 믿지 말고 `getSubscribedFields()` 로 되읽어 확인** ([`meta-api.md`](./meta-api.md) §1.1)
+  - [ ] 실패 시 사람이 읽는 오류 (토큰 만료 / 권한 부족 / 계정 불일치 / **필드 미구독**)
+  - [ ] **안내에 넣을 것**: 연동할 본인 계정도 Instagram 테스터여야 하고, 앱이 라이브 모드여야
+        실제 이벤트가 온다 (§4.1). 둘 다 Phase 1 에서 오래 막혔던 지점이다
+- [ ] `accounts/` 설정 화면에 **대댓글 문구**(`defaultCommentReplyText`)와
+      **팔로워 게이트**(`nonFollowerText`) — 둘 다 비우면 동작하지 않는 opt-in.
+      게이트를 노출하기 전에 Phase 1 §남은 것의 `GATE_SENT` 를 먼저 고쳐야 한다
 - [ ] `campaigns/` — CRUD + **게시글 URL 해석** ([`meta-api.md`](./meta-api.md) §5: `/me/media` permalink 매칭)
   - [ ] 매칭 실패 시 같은 응답의 목록을 후보로 반환 (추가 호출 없이)
+  - [ ] `instagram/client.ts` 에 `listMedia()` 추가 — Phase 1 에서는 `curl` 한 줄로 때웠고
+        **URL 붙여넣기 UI 가 생기는 지금이 승격 시점**이다
+  - [ ] 보관(archive)된 게시물은 `/me/media` 에서 빠진다. 기존 캠페인의 `permalink`·`caption`·
+        `thumbnailUrl` 이 비정규화돼 있는 이유이므로 목록에서 사라져도 화면은 유지된다
 - [ ] `events/` — 최근 활동 목록 (페이지네이션)
 - [ ] 모든 쿼리는 `igAccountId` 스코프. 남의 계정 데이터가 새지 않는지 테스트
 

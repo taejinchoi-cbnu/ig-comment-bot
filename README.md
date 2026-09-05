@@ -17,7 +17,7 @@
 | [`docs/why.md`](docs/why.md) | 배경 · 시장 조사 · 제품 원칙 |
 | [`docs/architecture.md`](docs/architecture.md) | 스택 결정 근거 · 데이터 모델 · 코드 구조 |
 | [`docs/meta-api.md`](docs/meta-api.md) | Meta API 검증된 제약과 함정 ★ |
-| [`docs/phase-1-pipeline.md`](docs/phase-1-pipeline.md) | 현재 단계 |
+| [`docs/phase-2-web.md`](docs/phase-2-web.md) | 현재 단계 (Phase 1 완료) |
 
 회고는 [`study/`](study/) — PAAR 구조로 판단 과정을 기록.
 에이전트/기여자 규칙은 [`AGENTS.md`](AGENTS.md).

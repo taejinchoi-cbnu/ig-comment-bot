@@ -36,6 +36,12 @@ SELECT media_id, type, count(*) AS n, count(DISTINCT igsid) AS people
  GROUP BY media_id, type;
 ```
 
+> ⚠️ **이 쿼리를 짜기 전에 고쳐야 할 것이 둘 있다** (Phase 1 §남은 것):
+> - 팔로워로 확인된 사람은 **확인 단계를 건너뛰어** `USER_REPLIED` 없이 `FOLLOW_UP_SENT` 가
+>   찍힌다 → 답장→양식 전환율이 100% 를 넘는다
+> - 팔로워 게이트가 켜져 있으면 게이트에 막힌 건이 `COMMENT_SKIPPED`+`mediaId` 로 남아,
+>   같은 댓글이 "발송됨" 과 "발송 안 됨" 에 **동시에 집계된다**
+
 미리 집계 테이블을 만들지 않는다. 이벤트가 수천 건 규모다.
 
 ### "왜 DM이 안 갔지?"
@@ -48,6 +54,7 @@ SELECT media_id, type, count(*) AS n, count(DISTINCT igsid) AS people
 | `NO_KEYWORD_MATCH` | 설정한 키워드가 댓글에 없었어요 |
 | `DUPLICATE` | 이미 보낸 댓글이에요 |
 | `CAMPAIGN_DISABLED` | 이 자동 DM이 꺼져 있었어요 |
+| `NOT_FOLLOWER` | 팔로워가 아니라서 보내지 않았어요 (게이트를 켠 경우만) |
 
 - [ ] 실패(`FAILED`)도 `errorCode` → "인스타 권한이 없어요" / "댓글이 7일 지났어요"
 
@@ -73,8 +80,10 @@ SELECT media_id, type, count(*) AS n, count(DISTINCT igsid) AS people
 
 - [x] MESSAGE 핸들러에서 답장 직후 `GET /{IGSID}?fields=is_user_follow_business` 호출
       — 2026-09-04 완료. 팔로워 게이트를 앞당기면서 같이 들어갔고 `Event.isFollower` 에 박제된다
-- [ ] **결과를 `Event` 행에 그때 기록한다.** 나중에 다시 조회하면 값이 변해 과거 통계가 흔들린다
-- [ ] 조회 실패는 무시하고 진행 — 이 값 때문에 DM 발송이 막히면 안 된다
+- [x] **결과를 `Event` 행에 그때 기록한다.** 나중에 다시 조회하면 값이 변해 과거 통계가 흔들린다
+      — 2026-09-05 완료. `PRIVATE_REPLY_SENT`·`FOLLOW_UP_SENT` 에 `isFollower` 가 박제된다
+- [x] 조회 실패는 무시하고 진행 — 이 값 때문에 DM 발송이 막히면 안 된다
+      — `context.ts` 의 `checkFollower` 가 절대 던지지 않고 `null` 을 돌려준다
 - [ ] 게시글 줄에 `팔로워 28 / 비팔로워 13` 표시
 
 ---
