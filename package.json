@@ -1,6 +1,7 @@
 {
   "name": "ig-comment-bot",
   "private": true,
+  "license": "CC-BY-NC-4.0",
   "packageManager": "pnpm@10.5.2",
   "engines": { "node": ">=24" },
   "scripts": {
